@@ -1,4 +1,5 @@
 import numpy as np
+import struct
 
 def floatToBits(f):
    return np.fromstring(np.float32(f).tostring(), dtype='<u4')[0]
@@ -61,7 +62,9 @@ def write_all(xtest, ytest):
          i = i + 1
       write_image(number_string(ytest[i]), xtest[i])
 
-def write_convolution_weights(w, layer, header, packing_factor=1):
+def write_convolution_weights(w, layer, header, data, packing_factor=1):
+
+   '''
    header.write("   static const weight_t layer{:d}_weights[{:d}][{:d}][{:d}][{:d}] = \n".format(layer, w.shape[3], w.shape[2], w.shape[0], w.shape[1]))
    header.write("   { \n")
    for out_image in range(w.shape[3]):
@@ -89,6 +92,16 @@ def write_convolution_weights(w, layer, header, packing_factor=1):
          header.write(", \n")
       else:
          header.write("  \n")
+   '''
+
+   count = 0
+   for out_image in range(w.shape[3]):
+      for in_image in range(w.shape[2]): 
+         for r in range(w.shape[1]):
+            for c in range(w.shape[0]):
+               data.write(struct.pack('>f', w[r][c][in_image][out_image].numpy()))
+               count += 1
+   print('wrote: ', count, ' words')
 
    unit_offset_factor  = int(((w.shape[0] *w.shape[1]) + (packing_factor-1))/packing_factor)
    layer_offset_factor = unit_offset_factor * (w.shape[2] * w.shape[3])
@@ -114,7 +127,8 @@ def write_convolution_weights(w, layer, header, packing_factor=1):
    return w.shape[0] * w.shape[1] * w.shape[2] * w.shape[3];
 
 
-def write_dense_weights(w, layer, count, header, packing_factor=1):
+def write_dense_weights(w, layer, header, data, packing_factor=1):
+   '''
    header.write("   static const weight_t layer{:d}_weights[{:d}][{:d}] = \n".format(layer, w.shape[1], w.shape[0]))
    header.write("   { \n");
    for i in range(w.shape[1]):
@@ -132,7 +146,12 @@ def write_dense_weights(w, layer, count, header, packing_factor=1):
          header.write("      }, \n");
       else:
          header.write("      }  \n");
+   '''
 
+   for i in range(w.shape[1]):
+      for c in range(w.shape[0]):
+         data.write(struct.pack('>f', w[c][i].numpy()))
+               
    unit_offset_factor  = int((w.shape[0] + (packing_factor-1))/packing_factor)
    layer_offset_factor = unit_offset_factor * w.shape[1]
 
@@ -154,7 +173,8 @@ def write_dense_weights(w, layer, count, header, packing_factor=1):
 
    return w.shape[0] * w.shape[1];
 
-def write_biases(b, layer, header):
+def write_biases(b, layer, data):
+   '''
    header.write("   static const weight_t layer{:d}_biases[{:d}]     = \n".format(layer, b.shape[0]))
    header.write("   { \n");
    for i in range(b.shape[0]):
@@ -166,6 +186,10 @@ def write_biases(b, layer, header):
          header.write("  \n")
    header.write("   }; \n");
    header.write("      \n"); 
+   '''
+
+   for i in range(b.shape[0]):
+      data.write(struct.pack('>f', b[i].numpy()))
 
    return b.shape[0];
 
@@ -300,6 +324,7 @@ def memimg_biases(header, memimg, fixed_file, b, layer, address):
 
 def write_header_file(weights, height, width, include_bias=False):
    header_file = open("weights.h", "w")
+   data_file   = open("../data/weight_float.bin", "w+b")
 
    weight_size = 1 # keeps C pointer arithmetic happy
 
@@ -308,36 +333,31 @@ def write_header_file(weights, height, width, include_bias=False):
    weight_index = 0
 
    print("Layer #1")
-   size = write_convolution_weights (weights[weight_index], layer, header_file)
+   size = write_convolution_weights (weights[weight_index], layer, header_file, data_file)
    current_address += size * weight_size
    weight_index += 1
    if include_bias:
-      size = write_biases              (weights[weight_index], layer, header_file)
+      size = write_biases              (weights[weight_index], layer, data_file)
       current_address += size * weight_size
       weight_index += 1
    layer += 1
 
    print("Layer #2")
-   size = write_convolution_weights (weights[weight_index], layer, header_file)
+   size = write_dense_weights (weights[weight_index], layer, header_file, data_file)
    current_address += size * weight_size
    weight_index += 1
    if include_bias:
-      size = write_biases              (weights[weight_index], layer, header_file)
+      size = write_biases              (weights[weight_index], layer, data_file)
       current_address += size * weight_size
       weight_index += 1
    layer += 1
 
-   if include_bias:
-      input_size = weights[weight_index-2].shape[3]
-   else:
-      input_size = weights[weight_index-1].shape[3]
-
    print("Layer #3")
-   size = write_dense_weights       (weights[weight_index], layer, input_size, header_file)
+   size = write_dense_weights       (weights[weight_index], layer, header_file, data_file)
    current_address += size * weight_size
    weight_index += 1
    if include_bias:
-      size = write_biases              (weights[weight_index], layer, header_file)
+      size = write_biases              (weights[weight_index], layer, data_file)
       current_address += size * weight_size
       weight_index += 1
    layer += 1
@@ -351,6 +371,7 @@ def write_header_file(weights, height, width, include_bias=False):
    header_file.write(" \n");
 
    header_file.close()
+   data_file.close()
 
 
 def write_memory_image_file(weights, height, width, include_bias=False, base_address=0x40000000):
