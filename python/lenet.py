@@ -24,7 +24,7 @@ y_test = np_utils.to_categorical(y_test)
 num_classes = y_test.shape[1]
 
 # define LeNet model
-def baseline_model(num_conv_out):
+def baseline_model():
         # create model
         model = Sequential()
         model.add(Conv2D(20, (5,5), use_bias=True, padding="same", activation=None, input_shape=(28,28,1)))
@@ -36,8 +36,7 @@ def baseline_model(num_conv_out):
         model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
         return model
 
-n=8
-model = baseline_model(n)
+model = baseline_model()
 model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=20, batch_size=200, verbose=1)
 scores = model.evaluate(X_test, y_test, verbose=0)
 print(n, "Baseline Error: %.2f%%" % (100-scores[1]*100))
