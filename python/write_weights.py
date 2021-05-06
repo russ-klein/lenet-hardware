@@ -12,8 +12,7 @@ def uint(n):
   return 0xFFFFFFFF + n + 1
 
 
-def write_image(name, a):
-   header_file = open(name + ".h", "w")
+def write_image(name, a, header_file):
    header_file.write("  unsigned char " + name + "[28][28] = { \n")
    for row in range(a.shape[0]):
      header_file.write("         { ");
@@ -29,7 +28,6 @@ def write_image(name, a):
      else:
         header_file.write(" }  \n");
    header_file.write("     }; \n")
-   header_file.close()
 
 def number_string(i):
    if (i == 0): 
@@ -55,14 +53,20 @@ def number_string(i):
    return None
 
 
-def write_all(xtest, ytest):
+def write_test_images(xtest, ytest):
+   header_file = open("test_images.h", "w")
+
    for num in range(10):
       i = 0
       while (ytest[i] != num) :
          i = i + 1
-      write_image(number_string(ytest[i]), xtest[i])
+      write_image(number_string(ytest[i]), xtest[i], header_file)
 
-def write_convolution_weights(w, layer, header, data, base):
+   header_file.close()
+
+def write_convolution_weights(w, layer, header, data, base, image_height, image_width):
+
+   out_size = int(w.shape[3] * image_height * image_width / 4)
 
    count = 0
    for out_image in range(w.shape[3]):
@@ -76,6 +80,8 @@ def write_convolution_weights(w, layer, header, data, base):
    size = w.shape[0] * w.shape[1] * w.shape[2] * w.shape[3];
 
    header.write("      \n")
+   header.write("   //=======layer {:d} - convolution===============================   \n".format(layer))
+   header.write("      \n")
    header.write("   static const int layer{:d}_input_images       = {:d};  \n".format(layer, w.shape[2]))
    header.write("   static const int layer{:d}_output_images      = {:d};  \n".format(layer, w.shape[3]))
    header.write("   static const int layer{:d}_weights_rows       = {:d};  \n".format(layer, w.shape[1]))
@@ -84,34 +90,40 @@ def write_convolution_weights(w, layer, header, data, base):
    header.write("   static const int layer{:d}_num_weights        = {:d};  \n".format(layer, w.shape[0]*w.shape[1]*w.shape[2]*w.shape[3]))
    header.write("      \n")
    header.write("   static const int layer{:d}_weight_offset      = {:d};  \n".format(layer, base))
+   header.write("   static const int layer{:d}_out_size           = {:d};  \n".format(layer, out_size))
    header.write("      \n")
 
-   return w.shape[0] * w.shape[1] * w.shape[2] * w.shape[3];
+   return w.shape[0] * w.shape[1] * w.shape[2] * w.shape[3], out_size;
 
 
 def write_dense_weights(w, layer, header, data, base):
 
+   count = 0
    for i in range(w.shape[1]):
       for c in range(w.shape[0]):
          data.write(struct.pack('<f', w[c][i].numpy()))
+         count += 1
+   print('wrote: ', count, ' words')
                
+   header.write("      \n")
+   header.write("   //=======layer {:d} - dense=====================================   \n".format(layer))
    header.write("      \n");
-   header.write("   static const int layer{:d}_weights_rows = {:d}; \n".format(layer, w.shape[1]));
-   header.write("   static const int layer{:d}_weights_cols = {:d}; \n".format(layer, w.shape[0]));
+   header.write("   static const int layer{:d}_weights_rows       = {:d}; \n".format(layer, w.shape[1]));
+   header.write("   static const int layer{:d}_weights_cols       = {:d}; \n".format(layer, w.shape[0]));
    header.write("      \n");
    header.write("   static const int layer{:d}_num_weights        = {:d};  \n".format(layer, w.shape[0]*w.shape[1]))
    header.write("      \n")
    header.write("   static const int layer{:d}_weight_offset      = {:d};  \n".format(layer, base))
+   header.write("   static const int layer{:d}_out_size           = {:d};  \n".format(layer, w.shape[1]));
    header.write("      \n")
    header.write("      \n")
 
-   return w.shape[0] * w.shape[1];
+   return w.shape[0] * w.shape[1], w.shape[1];
 
 def write_biases(b, layer, header, data, base):
 
    header.write("      \n");
    header.write("   static const int layer{:d}_num_bias_values    = {:d};  \n".format(layer, b.shape[0]))
-   header.write("      \n")
    header.write("   static const int layer{:d}_bias_offset        = {:d};  \n".format(layer, base))
    header.write("      \n")
    header.write("      \n")
@@ -252,14 +264,18 @@ def memimg_biases(header, memimg, fixed_file, b, layer, address):
 
 def write_header_file(weights, height, width, include_bias=False):
    header_file = open("weights.h", "w")
-   data_file   = open("../data/weight_float.bin", "w+b")
+   data_file   = open("weights_float.bin", "w+b")
 
    current_address = 0
+   size_of_outputs = 0
    layer = 1
    weight_index = 0
 
    print("Layer #1")
-   current_address += write_convolution_weights (weights[weight_index], layer, header_file, data_file, current_address)
+   weight_size, out_size = write_convolution_weights (weights[weight_index], layer, header_file, data_file, current_address, height, width)
+   current_address += weight_size
+   size_of_outputs += out_size
+
    weight_index += 1
    if include_bias:
       current_address += write_biases (weights[weight_index], layer, header_file, data_file, current_address)
@@ -267,7 +283,10 @@ def write_header_file(weights, height, width, include_bias=False):
    layer += 1
 
    print("Layer #2")
-   current_address += write_dense_weights (weights[weight_index], layer, header_file, data_file, current_address)
+   weight_size, out_size = write_dense_weights (weights[weight_index], layer, header_file, data_file, current_address)
+   current_address += weight_size
+   size_of_outputs += out_size
+
    weight_index += 1
    if include_bias:
       current_address += write_biases (weights[weight_index], layer, header_file, data_file, current_address)
@@ -275,7 +294,10 @@ def write_header_file(weights, height, width, include_bias=False):
    layer += 1
 
    print("Layer #3")
-   current_address += write_dense_weights (weights[weight_index], layer, header_file, data_file, current_address)
+   weight_size, out_size = write_dense_weights (weights[weight_index], layer, header_file, data_file, current_address)
+   current_address += weight_size
+   size_of_outputs += out_size
+
    weight_index += 1
    if include_bias:
       current_address += write_biases (weights[weight_index], layer, header_file, data_file, current_address)
@@ -283,11 +305,16 @@ def write_header_file(weights, height, width, include_bias=False):
    layer += 1
 
    header_file.write(" \n");
-   header_file.write("   static int const image_height    = {:d}; \n".format(height))
-   header_file.write("   static int const image_width     = {:d}; \n".format(width))
+   header_file.write("   //=======End of layers==========================================   \n".format(layer))
+   header_file.write(" \n");
+   header_file.write(" \n");
+   header_file.write("   static int const image_height              = {:d}; \n".format(height))
+   header_file.write("   static int const image_width               = {:d}; \n".format(width))
+   header_file.write("   static int const image_size                = {:d}; \n".format(height*width))
    header_file.write(" \n");
 
-   header_file.write("   static int const size_of_weights = {:d}; \n".format(current_address))
+   header_file.write("   static int const size_of_weights           = {:d}; \n".format(current_address))
+   header_file.write("   static int const size_of_outputs           = {:d}; \n".format(size_of_outputs))
    header_file.write(" \n");
 
    header_file.close()
