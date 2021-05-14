@@ -7,13 +7,13 @@ FUNCTION         ?= conv_par_in
 ACCEL_NAME       ?= cat_accel
 PAR              ?= 1
 
-SOURCES          = mnist_par.hpp
+SOURCES          = testbench.cpp sw_infer.cpp diags.cpp
 SPEC_FILE        = $(FUNCTION).spec
-HEADERS          =
+HEADERS          = sw_infer.h diags.h mnist_par.hpp 
 
 ACCELERATOR      = ../hw/master_par$(PAR).v
 BUS_IF           = ../hw/$(ACCEL_NAME).v
-HEADER           = ../sw/$(FUNCTION).h
+HEADER           = ../sw/$(FUNCTION).h 
 
 HOST_EXE         = testbench
 
@@ -43,9 +43,9 @@ $(ACCELERATOR): $(SOURCES) $(HEADERS) master_par$(PAR).tcl
 	@cp Catapult/*/concat_rtl.v $@
 	@rm -rf $(CRUFT)
 
-$(HOST_EXE): $(HEADERS) $(SOURCES) testbench.cpp mnist_par.hpp
-	@echo "gcc testbench.cpp -o $@"
-	@g++ -g -o $@ $(INCLUDES) -D HOST -D PAR_IN=$(PAR) -std=c++11 $(OPTS) testbench.cpp >> make.out
+$(HOST_EXE): $(HEADERS) $(SOURCES) 
+	@echo "gcc $(SOURCES) -o $@"
+	@g++ -g -o $@ $(INCLUDES) -D HOST -D PAR_IN=$(PAR) -std=c++11 $(OPTS) $(SOURCES) >> make.out
 
 $(BUS_IF): $(SPEC_FILE) $(SOURCES)
 	@echo ifgen $(FUNCTION) $(SPEC_FILE) $(ACCEL_NAME) > $@

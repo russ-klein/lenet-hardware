@@ -1,10 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 
 #include "weights.h"
 
 #include "test_images.h"
+
+#include "sw_infer.h"
+#include "diags.h"
 
 static const char program_name[] = "mnist_inference";
 
@@ -83,7 +87,7 @@ int in_bounds(
 }
 
 
-void conv2d_sw(
+void conv2d_hw(
                cat_memory_type *memory,
                int image_offset,
                int weight_offset,
@@ -110,8 +114,10 @@ void conv2d_sw(
     int weight_index;
     int output_index;
     int input_index;
-    int size = height * width;
-    int filter_size = filter_height * filter_width;
+    int input_base;
+    int output_base;
+    const int size = height * width;
+    const int filter_size = filter_height * filter_width;
 
     const int stride = 2;
     const int chatty = 0;
@@ -127,7 +133,7 @@ void conv2d_sw(
                             cc = c + fc - (filter_width -1)/2;
                             if (in_bounds(rr, cc, height, width)) {
                                 image_index = i * size + rr * width + cc;
-                                weight_index = o * filter_size * num_input_images + i * filter_size + fr * width + fc;
+                                weight_index = o * filter_size * num_input_images + i * filter_size + fr * filter_width + fc;
                                 image_value = get_cat_value(memory, image_offset + image_index);
                                 weight_value = get_cat_value(memory, weight_offset + weight_index);
 //#ifdef ARM
@@ -142,7 +148,6 @@ void conv2d_sw(
                         }
                     }
                     output_index = o * image_size + r * image_width + c;
-                    if (maxpool) output_index = o * image_size /(stride * stride) + r * image_width + c;
                     if (i==0) n = sum; else n = sum + get_cat_value(memory, output_image_offset + output_index);
                     set_cat_value(memory, output_image_offset + output_index, n);
                 }
@@ -168,15 +173,18 @@ void conv2d_sw(
             } 
         }
         if (maxpool) {
+            input_base = o * size;
+            output_base = o * size / (stride * stride);
+
             for (r=0; r<height/stride; r++) {
                 for (c=0; c<width/stride; c++) {
-                    output_index = o * size/(stride * stride) + r * width / stride + c;
-                    input_index = o * size/(stride * stride) + r * stride * width + c * stride;
+                    output_index = output_base + r * width / stride + c;
+                    input_index = input_base + r * stride * width + c * stride;
 
                     max = get_cat_value(memory, output_image_offset + input_index);
                     for (r1=0; r1<stride; r1++) {
                         for (c1=0; c1<stride; c1++) {
-                            input_index = o * size + (r+r1) * width + (c+c1);
+                            input_index = input_base + (r * stride + r1) * width + (c * stride + c1);
                             n = get_cat_value(memory, output_image_offset + input_index);
                             if (n > max) {
                                 max = n;
@@ -192,7 +200,7 @@ void conv2d_sw(
 }
 
 
-void dense_sw(
+void dense_hw(
               cat_memory_type *memory,
               int input_image_offset,
               int weight_offset,
@@ -249,7 +257,7 @@ void softmax(
 
 //=====Inference functions===================//
 
-void infer(cat_memory_type *memory, int image_offset, float *probabilities)
+void hw_infer(cat_memory_type *memory, int image_offset, float *probabilities)
 {
     int layer1_out_offset  = size_of_weights + image_size;
     int layer2_out_offset  = layer1_out_offset + layer1_out_size;
@@ -265,7 +273,7 @@ void infer(cat_memory_type *memory, int image_offset, float *probabilities)
         printf("Convolution layer #1 \n");
     }
 
-    conv2d_sw(memory, image_offset, layer1_weight_offset, layer1_bias_offset, layer1_out_offset,
+    conv2d_hw(memory, image_offset, layer1_weight_offset, layer1_bias_offset, layer1_out_offset,
               layer1_input_images, layer1_output_images, image_height, image_width, 5, 5, 1, 1, 0);
 
     if (chatty) {
@@ -275,12 +283,12 @@ void infer(cat_memory_type *memory, int image_offset, float *probabilities)
         printf("Dense layer #2 \n");
     }
 
-    dense_sw (memory, layer1_out_offset, layer2_weight_offset, layer2_bias_offset, layer2_out_offset,
+    dense_hw (memory, layer1_out_offset, layer2_weight_offset, layer2_bias_offset, layer2_out_offset,
               layer2_weights_cols / (image_size/4), image_size/4, layer2_weights_rows, 1);
 
     if (chatty) printf("Dense layer #3 \n");
 
-    dense_sw (memory, layer2_out_offset, layer3_weight_offset, layer3_bias_offset, layer3_out_offset,
+    dense_hw (memory, layer2_out_offset, layer3_weight_offset, layer3_bias_offset, layer3_out_offset,
               layer3_weights_cols / (image_size/4), image_size/4, layer3_weights_rows, 1);
 
     copy_from_cat(memory, host_layer3_out, layer3_out_offset, layer3_weights_rows);
@@ -290,6 +298,51 @@ void infer(cat_memory_type *memory, int image_offset, float *probabilities)
         for (int i=0; i<10; i++) printf("raw scores[%d] = %f \n", i, host_layer3_out[i]);
     }
 
+    softmax(host_layer3_out, probabilities, layer3_weights_rows);
+}
+
+
+void sw_infer(float *memory, int image_offset, float *probabilities)
+{   
+    int layer1_out_offset  = size_of_weights + image_size;
+    int layer2_out_offset  = layer1_out_offset + layer1_out_size;
+    int layer3_out_offset  = layer2_out_offset + layer2_out_size;
+    float host_layer3_out[layer3_out_size];
+    
+    const int chatty = 1;
+    
+    if (chatty) {
+        printf("sw image in: \n");
+        print_image(memory, image_offset, image_height, image_width, 1);
+        
+        printf("Convolution layer #1 \n");
+    }
+    
+    conv2d_sw(memory + image_offset, memory + layer1_weight_offset, memory + layer1_bias_offset, memory + layer1_out_offset,
+              layer1_input_images, layer1_output_images, image_height, image_width, 5, 5, 1, 1, 0);
+    
+    if (chatty) {
+        printf("sw image out layer #1: \n");
+        print_image(memory, layer1_out_offset, image_height/2, image_width/2, layer1_output_images);
+        
+        printf("Dense layer #2 \n");
+    }
+    
+    dense_sw (memory + layer1_out_offset, memory + layer2_weight_offset, memory + layer2_bias_offset, memory + layer2_out_offset,
+              layer2_weights_cols / (image_size/4), image_size/4, layer2_weights_rows, 1);
+    
+    if (chatty) printf("Dense layer #3 \n");
+    
+    dense_sw (memory + layer2_out_offset, memory + layer3_weight_offset, memory + layer3_bias_offset, memory + layer3_out_offset,
+              layer3_weights_cols / (image_size/4), image_size/4, layer3_weights_rows, 1);
+    
+    memcpy(host_layer3_out, memory + layer3_out_offset, layer3_weights_rows * sizeof(float));
+    
+    if (chatty) {
+        printf("raw sw scores... \n");
+        for (int i=0; i<10; i++) printf("raw scores[%d] = %f \n", i, host_layer3_out[i]);
+    }
+    
     softmax(host_layer3_out, probabilities, layer3_weights_rows);
 }
 
@@ -334,9 +387,9 @@ void scale(unsigned char *input_image, float *output_image, int count)
 }
 
 
-void sw_inference(unsigned char *input_image, cat_memory_type *memory, float *probabilities)
+void hw_inference(unsigned char *input_image, cat_memory_type *memory, float *probabilities)
 {   
-    float image[image_height * image_width];
+    float image[image_height * image_width * layer1_input_images];
     int image_offset = size_of_weights;
     int i;
     const int chatty = 1;
@@ -346,7 +399,7 @@ void sw_inference(unsigned char *input_image, cat_memory_type *memory, float *pr
     load_memory(memory);
     copy_to_cat(memory, image_offset, image, image_height * image_width * layer1_input_images);
     
-    infer(memory, image_offset, probabilities);
+    hw_infer(memory, image_offset, probabilities);
     
     if (chatty) {
         printf("software probabilities: \n");
@@ -358,24 +411,52 @@ void sw_inference(unsigned char *input_image, cat_memory_type *memory, float *pr
 }
 
 
+void sw_inference(unsigned char *input_image, float *memory, float *probabilities)
+{
+    float image[image_height * image_width * layer1_input_images];
+    int image_offset = size_of_weights;
+    int i;
+    const int chatty = 1;
+
+    scale(input_image, image, image_height * image_width);
+
+    load_memory(memory);
+    memcpy(memory+image_offset, image, image_height * image_width * layer1_input_images * sizeof(float));
+
+    sw_infer(memory, image_offset, probabilities);
+
+    if (chatty) {
+        printf("software probabilities: \n");
+        for (i=0; i<10; i++) {
+            printf(" %d: %8.6f \n", i, probabilities[i]);
+        }
+        printf("\n");
+    }
+}
+
+
 int main()
 {
     // possible values for *input_image are "zero" through "nine" //
-    unsigned char *input_image = (unsigned char *) five;
+    unsigned char *input_image = (unsigned char *) one;
     float sw_prob[10];
     float hw_prob[10];
     int errors = 0;
     int i;
 
-    static cat_memory_type memory[0x1000000];  // make it static so you do not blow up the stack
+    static cat_memory_type hw_memory[0x1000000];  // make it static so you do not blow up the stack
+    static float           sw_memory[0x1000000];
 
     // sweep();
+    // test_conv2d();
+    // test_dense();
+    // return 0;
 
     printf("start sw: \n");
-    sw_inference(input_image, memory, sw_prob);
+    sw_inference(input_image, sw_memory, sw_prob);
 
-    //printf("start hw: \n");
-    //hw_inference(input_image, memory, hw_prob);
+    printf("start hw: \n");
+    hw_inference(input_image, hw_memory, hw_prob);
 
     for (i=0; i<10; i++) {
         if (sw_prob[i] != hw_prob[i]) errors++;
