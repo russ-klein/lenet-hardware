@@ -1,11 +1,10 @@
 #include <stdio.h>
 
-#include "weights.h"
-#include "sw_infer.h"
+#include "hw_infer.h"
 
 void print_image(float *f, int h, int w, int c);
 
-static inline int in_bounds(
+static int in_bounds(
               int r,
               int c,
               int height,
@@ -18,7 +17,7 @@ static inline int in_bounds(
     return 1;
 }
 
-static inline int offset(int row, int col, int image, int height, int width, int images)
+static int offset(int row, int col, int image, int height, int width, int images)
 {
     int image_offset = (row * width) + col;
     int array_offset = (image_offset * images) + image;
@@ -28,18 +27,19 @@ static inline int offset(int row, int col, int image, int height, int width, int
 #define OUT_OFFSET(ROW, COL, IMAGE) offset(ROW, COL, IMAGE, height, width, num_output_images)
 #define IN_OFFSET(ROW, COL, IMAGE) offset(ROW, COL, IMAGE, height, width, num_input_images)
 
-static inline int weight_offset(int row, int col, int input_image, int output_image, int height, int width, int num_input_images, int num_output_images)
+static int weight_offset(int row, int col, int input_image, int output_image, int height, int width, int num_input_images, int num_output_images)
 {
     return output_image * height * width * num_input_images + input_image * height * width + row * width + col;
 }
 
 #define WEIGHT_OFFSET(ROW, COL, IN_IMAGE, OUT_IMAGE) weight_offset(ROW, COL, IN_IMAGE, OUT_IMAGE, filter_height, filter_width, num_input_images, num_output_images)
 
-void conv2d_sw(
-               float *image,
-               float *weights,
-               float *biases,
-               float *output_image,
+void conv2d_hw(
+               cat_memory_type *memory,
+               int image,
+               int weights,
+               int biases,
+               int output_image,
                int num_input_images,
                int num_output_images,
                int height,
@@ -80,14 +80,11 @@ void conv2d_sw(
                             cc = c + fc - (filter_width -1)/2;
                             if (in_bounds(rr, cc, height, width)) {
 
-                                // image_index = i * size + rr * width + cc;
-                                // weight_index = o * filter_size * num_input_images + i * filter_size + fr * filter_width + fc;
-
                                 image_index = IN_OFFSET(rr, cc, i);
                                 weight_index = WEIGHT_OFFSET(fr, fc, o, i);
 
-                                image_value = image[image_index];
-                                weight_value = weights[weight_index];
+                                image_value = get_cat_value(memory, image + image_index); // image[image_index];
+                                weight_value = get_cat_value(memory, weights + weight_index); // weights[weight_index];
 
                                 if (chatty) printf("image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
                                                    image_index, weight_index, image_value, weight_value, image_value * weight_value);
@@ -95,11 +92,10 @@ void conv2d_sw(
                             }
                         }
                     }
-                    // output_index = (r * width + c) * num_output_images + o;
                     output_index = OUT_OFFSET(r, c, o);
-                    if (i==0) n = sum; else n = sum + output_image[output_index];
-                    output_image[output_index] = n;
-                    if (chatty) printf("output[%d] = %5.3f \n", output_index, output_image[output_index]);
+                    if (i==0) n = sum; else n = sum + get_cat_value(memory, output_image + output_index); // output_image[output_index];
+                    set_cat_value(memory, output_image + output_index, n); //output_image[output_index] = n;
+                    if (chatty) printf("output[%d] = %5.3f \n", output_index, n);
                 }
             }
         }
@@ -108,9 +104,9 @@ void conv2d_sw(
                 for (c=0; c<width; c++) {
                     // output_index = (r * width + c) * num_output_images + o;
                     output_index = OUT_OFFSET(r, c, o);
-                    image_value = output_image[output_index];
-                    bias_value = biases[o];
-                    output_image[output_index] = image_value + bias_value;
+                    image_value = get_cat_value(memory, output_image + output_index); // output_image[output_index];
+                    bias_value = get_cat_value(memory, biases + o); // biases[o];
+                    set_cat_value(memory, output_image + output_index, image_value + bias_value); // output_image[output_index] = image_value + bias_value;
                 }
             }
         }
@@ -119,8 +115,8 @@ void conv2d_sw(
                 for (c=0; c<width; c++) {
                     // output_index = o * size + r * width + c;
                     output_index = OUT_OFFSET(r, c, o);
-                    n = output_image[output_index];
-                    if (n<0) output_image[output_index] = 0.0;
+                    n = get_cat_value(memory, output_image + output_index); // output_image[output_index];
+                    if (n<0) set_cat_value(memory, output_image + output_index, 0.0); // output_image[output_index] = 0.0;
                 }
             }
         }
@@ -132,18 +128,18 @@ void conv2d_sw(
                     input_index = offset(r*stride, c*stride, o, height, width, num_output_images);
                     output_index = offset(r, c, o, height/stride, width/stride, num_output_images);
 
-                    max = output_image[input_index];
+                    max = get_cat_value(memory, output_image + input_index); // output_image[input_index];
                     for (r1=0; r1<stride; r1++) {
                         for (c1=0; c1<stride; c1++) {
                             input_index = offset(r*stride + r1, c*stride + c1, o, height, width, num_output_images);
 
-                            n = output_image[input_index];
+                            n = get_cat_value(memory, output_image + input_index); // output_image[input_index];
                             if (n > max) {
                                 max = n;
                             }
                         }
                     }
-                    output_image[output_index] = max;
+                    set_cat_value(memory, output_image + output_index, max); // output_image[output_index] = max;
                 }
             }
         }
@@ -152,11 +148,12 @@ void conv2d_sw(
 
 
 
-void dense_sw(
-              float *input_image,
-              float *weights,
-              float *biases,
-              float *output_image,
+void dense_hw(
+              cat_memory_type *memory,
+              int input_image,
+              int weights,
+              int biases,
+              int output_image,
               int num_units,
               int unit_count,
               int output_image_elements,
@@ -173,25 +170,28 @@ void dense_sw(
         sum = 0.0;
         for (n=0; n<num_units; n++) {
             for (c=0; c<unit_count; c++) {
-                sum += input_image[n * unit_count + c] * weights[(i*num_units*unit_count)+n*unit_count+c];
-                if (chatty) printf("image_value: %5.3f weight_value: %5.3f product: %5.3f sum: %5.3f \n",
-                       input_image[n * unit_count + c], weights[(i*num_units*unit_count)+n*unit_count+c], 
-                       input_image[n * unit_count + c] * weights[(i*num_units*unit_count)+n*unit_count+c], sum);
+                sum += get_cat_value(memory, input_image + n * unit_count + c) *
+                       get_cat_value(memory, weights + (i*num_units*unit_count)+n*unit_count+c);
+                // sum += input_image[n * unit_count + c] * weights[(i*num_units*unit_count)+n*unit_count+c];
+                // if (chatty) printf("image_value: %5.3f weight_value: %5.3f product: %5.3f sum: %5.3f \n",
+                //       input_image[n * unit_count + c], weights[(i*num_units*unit_count)+n*unit_count+c], 
+                //       input_image[n * unit_count + c] * weights[(i*num_units*unit_count)+n*unit_count+c], sum);
             }
         }
         if (bias) {
-            bias_value = biases[i];
-            output_image[i] = sum + bias_value;
+            bias_value = get_cat_value(memory, biases + i); // biases[i];
+            set_cat_value(memory, output_image + i, sum + bias_value); // output_image[i] = sum + bias_value;
         } else {
-            output_image[i] = sum;
+            set_cat_value(memory, output_image + i, sum); // output_image[i] = sum;
         }
         if (relu) {
-            if (output_image[i] <0) output_image[i] = 0;
+            //if (output_image[i] <0) output_image[i] = 0;
+            if (get_cat_value(memory, output_image + i) < 0) set_cat_value(memory, output_image + i, 0); // output_image[i] = 0;
         }
     }
 }
-
-void new_dense_sw(
+/*
+void new_dense_hw(
               float *input_image,
               float *weights,
               float *biases,
@@ -226,4 +226,4 @@ void new_dense_sw(
         }
     }
 }
-
+*/

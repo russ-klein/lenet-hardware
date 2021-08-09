@@ -196,7 +196,7 @@ int test_dense()
     printf("\n");
 
     dense_sw_exp(a, b, r_exp, A_HEIGHT, B_HEIGHT);
-    dense_sw(a, b, biases, r, A_HEIGHT, A_WIDTH, B_HEIGHT, 0);
+    dense_sw(a, b, biases, r, A_HEIGHT, A_WIDTH, B_HEIGHT, 0, 0);
 
     printf("r: "); for (i=0; i<B_HEIGHT; i++) printf("%5.2f ", r[i]); printf("\n");
 
@@ -208,5 +208,3 @@ int test_dense()
     return errors;
 
 }
-
-

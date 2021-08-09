@@ -7,9 +7,9 @@ FUNCTION         ?= conv_par_in
 ACCEL_NAME       ?= cat_accel
 PAR              ?= 1
 
-SOURCES          = testbench.cpp sw_infer.cpp diags.cpp
+SOURCES          = testbench.cpp hw_infer.cpp sw_infer.cpp cat_access.cpp diags.cpp
 SPEC_FILE        = $(FUNCTION).spec
-HEADERS          = sw_infer.h diags.h mnist_par.hpp 
+HEADERS          = cat_access.h hw_infer.h sw_infer.h diags.h mnist_par.hpp 
 
 ACCELERATOR      = ../hw/master_par$(PAR).v
 BUS_IF           = ../hw/$(ACCEL_NAME).v
@@ -27,6 +27,8 @@ ifgen            = ../../../if_gen/if_gen_axi
 INCLUDES         = -I $(CATAPULT_HOME)/shared/include -I ../../../include -I .
 
 OPTS             += -D FIXED_POINT -D WEIGHT_MEMORY -D MASTER -D A53
+
+export WEIGHT_PATH = ../../../data
 
 .PHONY: all run_host clean
 

@@ -4,53 +4,80 @@
 #include <string.h>
 
 #include "weights.h"
-
 #include "test_images.h"
 
+#include "cat_access.h"
+
 #include "sw_infer.h"
+#include "hw_infer.h"
+
 #include "diags.h"
 
 static const char program_name[] = "mnist_inference";
 
-
-//=====Weight/scratchpad memory==============//
-
-// everything that reads and writes the weight/scratchpad memory should be of the type "cat_memory_type"
-// and should use the routines set|get_cat_value() and copy_to|from_cat() as the type will be differnt 
-// ac_fixed or native float types at different times
-// this keeps all the conversions in one place
-
-typedef float cat_memory_type;
-
-cat_memory_type get_cat_value(cat_memory_type *memory, int offset)
-{
-    return memory[offset];
-}
-
-
-void set_cat_value(cat_memory_type *memory, int offset, cat_memory_type value)
-{
-    memory[offset] = value;
-}
-
-
-void copy_to_cat(cat_memory_type *memory, int offset, float *source, int size)
-{
-    int i;
-
-    for (i=0; i<size; i++) set_cat_value(memory, offset+i, source[i]);
-}
-
-void copy_from_cat(cat_memory_type *memory, float *dest, int offset, int size)
-{
-    int i;
-
-    for (i=0; i<size; i++) dest[i] = get_cat_value(memory, offset + i);
-}
-
 //=====Debug routines========================//
 
-void print_image(cat_memory_type *memory, int image_offset, int height, int width, int count)
+void print_float_image(float *image, int height, int width, int count)
+{
+    int r;
+    int c;
+    int i;
+
+    for (i=0; i<count; i++) {
+        for (r=0; r<height; r++) {
+            for (c=0; c<width; c++) {
+                if (image[i * height * width + r * width + c] > 0) {
+                    printf("%5.3f, ", image[i * height * width + r * width + c]);
+                } else {
+                    printf("  -    ");
+                }
+            }
+            printf("\n");
+        }
+        printf("\n");
+    }
+}
+
+void print_char_image(unsigned char *image, int height, int width, int count)
+{
+    int r;
+    int c;
+    int i;
+
+    for (i=0; i<count; i++) {
+        for (r=0; r<height; r++) {
+            for (c=0; c<width; c++) {
+                if (image[i * height * width + r * width + c] > 0) {
+                    printf("%3d, ", image[i * height * width + r * width + c]);
+                } else {
+                    printf("  -  ");
+                }
+            }
+            printf("\n");
+        }
+        printf("\n");
+    }
+}
+
+void print_float_kernel(float *kernel, int kernel_height, int kernel_width, int count)
+{
+    int r;
+    int c;
+    int i;
+
+    for (i=0; i<count; i++) {
+        for (r=0; r<kernel_height; r++) {
+            for (c=0; c<kernel_width; c++) {
+                printf("%5.3f, ", kernel[i * kernel_height * kernel_width + r * kernel_width + c]);
+            }
+            printf("\n");
+        }
+        printf("\n");
+    }
+}
+
+
+void print_cat_image(cat_memory_type *memory, int image_offset, int height, int width, int count)
 {
     int r;
     int c;
@@ -71,167 +98,24 @@ void print_image(cat_memory_type *memory, int image_offset, int height, int widt
     }
 }
 
+void print_cat_kernel(cat_memory_type *memory, int kernel_offset, int kernel_height, int kernel_width, int count)
+{
+    int r;
+    int c;
+    int i;
+
+    for (i=0; i<count; i++) {
+        for (r=0; r<kernel_height; r++) {
+            for (c=0; c<kernel_width; c++) {
+                printf("%5.3f, ", memory[kernel_offset + i * kernel_height * kernel_width + r * kernel_width + c]);
+            }
+            printf("\n");
+        }
+        printf("\n");
+    }
+}
+
 //=====Keras layer functions=================//
-
-int in_bounds(
-              int r,
-              int c,
-              int height,
-              int width)
-{   
-    if (r < 0)        return 0;
-    if (r >= height)  return 0;
-    if (c < 0)        return 0;
-    if (c >= width)   return 0;
-    return 1;
-}
-
-
-void conv2d_hw(
-               cat_memory_type *memory,
-               int image_offset,
-               int weight_offset,
-               int bias_offset,
-               int output_image_offset,
-               int num_input_images,
-               int num_output_images,
-               int height,
-               int width,
-               int filter_height,
-               int filter_width,
-               int maxpool,
-               int bias,
-               int relu)
-{
-    int  o, i, fr, fc, r, c, rr, cc, r1, c1;
-    float sum;
-    float max;
-    float n;
-    float image_value;
-    float weight_value;
-    float bias_value;
-    int image_index;
-    int weight_index;
-    int output_index;
-    int input_index;
-    int input_base;
-    int output_base;
-    const int size = height * width;
-    const int filter_size = filter_height * filter_width;
-
-    const int stride = 2;
-    const int chatty = 0;
-
-    for (o=0; o<num_output_images; o++) {
-        for (i=0; i<num_input_images; i++) {
-            for (r=0; r<height; r++) {
-                for (c=0; c<width; c++) {
-                    sum = 0.0;
-                    for (fr=0; fr<filter_height; fr++) {
-                        for (fc=0; fc<filter_width; fc++) {
-                            rr = r + fr - (filter_height -1)/2;
-                            cc = c + fc - (filter_width -1)/2;
-                            if (in_bounds(rr, cc, height, width)) {
-                                image_index = i * size + rr * width + cc;
-                                weight_index = o * filter_size * num_input_images + i * filter_size + fr * filter_width + fc;
-                                image_value = get_cat_value(memory, image_offset + image_index);
-                                weight_value = get_cat_value(memory, weight_offset + weight_index);
-//#ifdef ARM
-                                if (chatty) printf("image_index: %d weight_index: %d image_value: %5.2f weight_value: %5.2f \n",
-                                                   image_index, weight_index, image_value, weight_value);
-//#else
-//                              if (chatty) printf("image_index: %d weight_index: %d image_value: %5.2f weight_value: %5.2f \n",
-//                                                 image_index, weight_index, image_value.to_double(), weight_value.to_double());
-//#endif
-                                sum += image_value * weight_value;
-                            }
-                        }
-                    }
-                    output_index = o * image_size + r * image_width + c;
-                    if (i==0) n = sum; else n = sum + get_cat_value(memory, output_image_offset + output_index);
-                    set_cat_value(memory, output_image_offset + output_index, n);
-                }
-            }
-        }
-        if (relu) {
-            for (r=0; r<height; r++) {
-                for (c=0; c<width; c++) {
-                    output_index = o * size + r * width + c;
-                    n = get_cat_value(memory, output_image_offset + output_index);
-                    if (n<0) set_cat_value(memory, output_image_offset + output_index, 0.0);
-                }
-            }
-        }
-        if (bias) {  // todo: does the bias get calculated before or ater relu???
-            for (r=0; r<height; r++) {
-                for (c=0; c<width; c++) {
-                    image_index = o * size + r * width + c;
-                    image_value = get_cat_value(memory, output_image_offset + image_index);
-                    bias_value = get_cat_value(memory, bias_offset + o);
-                    set_cat_value(memory, output_image_offset + image_index, image_value + bias_value);
-                }
-            } 
-        }
-        if (maxpool) {
-            input_base = o * size;
-            output_base = o * size / (stride * stride);
-
-            for (r=0; r<height/stride; r++) {
-                for (c=0; c<width/stride; c++) {
-                    output_index = output_base + r * width / stride + c;
-                    input_index = input_base + r * stride * width + c * stride;
-
-                    max = get_cat_value(memory, output_image_offset + input_index);
-                    for (r1=0; r1<stride; r1++) {
-                        for (c1=0; c1<stride; c1++) {
-                            input_index = input_base + (r * stride + r1) * width + (c * stride + c1);
-                            n = get_cat_value(memory, output_image_offset + input_index);
-                            if (n > max) {
-                                max = n;
-                            }
-                        }
-                    }
-                    
-                    set_cat_value(memory, output_image_offset + output_index, max);
-                }
-            }
-        }
-    }
-}
-
-
-void dense_hw(
-              cat_memory_type *memory,
-              int input_image_offset,
-              int weight_offset,
-              int bias_offset,
-              int output_image_offset,
-              int num_units,
-              int unit_count,
-              int output_image_elements,
-              int bias)
-{
-   
-    int i, n, c;
-    float sum;
-    float bias_value;
-    int chatty = 0;
-   
-    for (i=0; i<output_image_elements; i++) {
-        sum = 0.0;
-        for (n=0; n<num_units; n++) {
-            for (c=0; c<unit_count; c++) {
-                sum += get_cat_value(memory, input_image_offset + n * unit_count + c) * get_cat_value(memory, weight_offset + (i*num_units*unit_count)+n*unit_count+c);
-            }
-        }
-        if (bias) {
-            bias_value = get_cat_value(memory, bias_offset + i);
-            set_cat_value(memory, output_image_offset + i, sum + bias_value);
-        } else {
-            set_cat_value(memory, output_image_offset + i, sum);
-        }
-    }
-}
 
 
 void softmax(
@@ -255,98 +139,6 @@ void softmax(
     }
 }
 
-//=====Inference functions===================//
-
-void hw_infer(cat_memory_type *memory, int image_offset, float *probabilities)
-{
-    int layer1_out_offset  = size_of_weights + image_size;
-    int layer2_out_offset  = layer1_out_offset + layer1_out_size;
-    int layer3_out_offset  = layer2_out_offset + layer2_out_size;
-    float host_layer3_out[layer3_out_size];
-
-    const int chatty = 1;
-
-    if (chatty) {
-        printf("sw image in: \n");
-        print_image(memory, image_offset, image_height, image_width, 1);
-
-        printf("Convolution layer #1 \n");
-    }
-
-    conv2d_hw(memory, image_offset, layer1_weight_offset, layer1_bias_offset, layer1_out_offset,
-              layer1_input_images, layer1_output_images, image_height, image_width, 5, 5, 1, 1, 0);
-
-    if (chatty) {
-        printf("sw image out layer #1: \n");
-        print_image(memory, layer1_out_offset, image_height/2, image_width/2, layer1_output_images);
-
-        printf("Dense layer #2 \n");
-    }
-
-    dense_hw (memory, layer1_out_offset, layer2_weight_offset, layer2_bias_offset, layer2_out_offset,
-              layer2_weights_cols / (image_size/4), image_size/4, layer2_weights_rows, 1);
-
-    if (chatty) printf("Dense layer #3 \n");
-
-    dense_hw (memory, layer2_out_offset, layer3_weight_offset, layer3_bias_offset, layer3_out_offset,
-              layer3_weights_cols / (image_size/4), image_size/4, layer3_weights_rows, 1);
-
-    copy_from_cat(memory, host_layer3_out, layer3_out_offset, layer3_weights_rows);
-
-    if (chatty) {
-        printf("raw sw scores... \n");
-        for (int i=0; i<10; i++) printf("raw scores[%d] = %f \n", i, host_layer3_out[i]);
-    }
-
-    softmax(host_layer3_out, probabilities, layer3_weights_rows);
-}
-
-
-void sw_infer(float *memory, int image_offset, float *probabilities)
-{   
-    int layer1_out_offset  = size_of_weights + image_size;
-    int layer2_out_offset  = layer1_out_offset + layer1_out_size;
-    int layer3_out_offset  = layer2_out_offset + layer2_out_size;
-    float host_layer3_out[layer3_out_size];
-    
-    const int chatty = 1;
-    
-    if (chatty) {
-        printf("sw image in: \n");
-        print_image(memory, image_offset, image_height, image_width, 1);
-        
-        printf("Convolution layer #1 \n");
-    }
-    
-    conv2d_sw(memory + image_offset, memory + layer1_weight_offset, memory + layer1_bias_offset, memory + layer1_out_offset,
-              layer1_input_images, layer1_output_images, image_height, image_width, 5, 5, 1, 1, 0);
-    
-    if (chatty) {
-        printf("sw image out layer #1: \n");
-        print_image(memory, layer1_out_offset, image_height/2, image_width/2, layer1_output_images);
-        
-        printf("Dense layer #2 \n");
-    }
-    
-    dense_sw (memory + layer1_out_offset, memory + layer2_weight_offset, memory + layer2_bias_offset, memory + layer2_out_offset,
-              layer2_weights_cols / (image_size/4), image_size/4, layer2_weights_rows, 1);
-    
-    if (chatty) printf("Dense layer #3 \n");
-    
-    dense_sw (memory + layer2_out_offset, memory + layer3_weight_offset, memory + layer3_bias_offset, memory + layer3_out_offset,
-              layer3_weights_cols / (image_size/4), image_size/4, layer3_weights_rows, 1);
-    
-    memcpy(host_layer3_out, memory + layer3_out_offset, layer3_weights_rows * sizeof(float));
-    
-    if (chatty) {
-        printf("raw sw scores... \n");
-        for (int i=0; i<10; i++) printf("raw scores[%d] = %f \n", i, host_layer3_out[i]);
-    }
-    
-    softmax(host_layer3_out, probabilities, layer3_weights_rows);
-}
-
-
 void load_memory(cat_memory_type *memory)
 {
     int i;
@@ -355,7 +147,14 @@ void load_memory(cat_memory_type *memory)
     // only neccesary when running on the host, when embedded the weights will be loaded into memory
 
     FILE *weight_database;
-    char weight_filename[] = "../../../data/weights_float.bin";
+    char *weight_path; 
+    char weight_base_filename[] = "weights_float.bin";
+    char weight_filename[10240];
+
+    weight_path = getenv("WEIGHT_PATH");
+
+    if (weight_path) sprintf(weight_filename, "%s/%s", weight_path, weight_base_filename);
+    else strcpy(weight_filename, weight_base_filename);
 
     weight_database = fopen(weight_filename, "r");
 
@@ -386,34 +185,11 @@ void scale(unsigned char *input_image, float *output_image, int count)
     }
 }
 
-
-void hw_inference(unsigned char *input_image, cat_memory_type *memory, float *probabilities)
-{   
-    float image[image_height * image_width * layer1_input_images];
-    int image_offset = size_of_weights;
-    int i;
-    const int chatty = 1;
-    
-    scale(input_image, image, image_height * image_width);
-    
-    load_memory(memory);
-    copy_to_cat(memory, image_offset, image, image_height * image_width * layer1_input_images);
-    
-    hw_infer(memory, image_offset, probabilities);
-    
-    if (chatty) {
-        printf("software probabilities: \n");
-        for (i=0; i<10; i++) { 
-            printf(" %d: %8.6f \n", i, probabilities[i]);
-        }
-        printf("\n");
-    }
-}
-
+#include "auto_infer.c"
 
 void sw_inference(unsigned char *input_image, float *memory, float *probabilities)
 {
-    float image[image_height * image_width * layer1_input_images];
+    float image[image_height * image_width * 1];
     int image_offset = size_of_weights;
     int i;
     const int chatty = 1;
@@ -421,24 +197,83 @@ void sw_inference(unsigned char *input_image, float *memory, float *probabilitie
     scale(input_image, image, image_height * image_width);
 
     load_memory(memory);
-    memcpy(memory+image_offset, image, image_height * image_width * layer1_input_images * sizeof(float));
+    memcpy(memory+image_offset, image, image_height * image_width * 1 * sizeof(float));
 
-    sw_infer(memory, image_offset, probabilities);
+    sw_auto_infer(memory, image_offset, probabilities);
 
     if (chatty) {
-        printf("software probabilities: \n");
+        printf("sw prediction: \n");
         for (i=0; i<10; i++) {
-            printf(" %d: %8.6f \n", i, probabilities[i]);
+           printf("%d = %8.6f \n", i, probabilities[i]);
         }
         printf("\n");
     }
 }
 
+
+void hw_inference(unsigned char *input_image, cat_memory_type *memory, float *probabilities)
+{
+    float image[image_height * image_width * 1];
+    int image_offset = size_of_weights;
+    float p[10];
+    int i;
+    const int chatty = 1;
+
+    scale(input_image, image, image_height * image_width);
+
+    load_memory(memory);
+
+    copy_to_cat(memory, image_offset, image, image_height * image_width * layer1_input_images);
+
+    hw_auto_infer(memory, image_offset, probabilities);
+
+    if (chatty) {
+        printf("hw prediction: \n");
+        for (i=0; i<10; i++) {
+           printf("%d = %8.6f \n", i, probabilities[i]);
+        }
+        printf("\n");
+    }
+}
+
+
+void all_digits(float *memory)
+{
+    unsigned char *image_list[] = { (unsigned char *) &zero, 
+                                    (unsigned char *) &one, 
+                                    (unsigned char *) &two, 
+                                    (unsigned char *) &three, 
+                                    (unsigned char *) &four, 
+                                    (unsigned char *) &five, 
+                                    (unsigned char *) &six, 
+                                    (unsigned char *) &seven, 
+                                    (unsigned char *) &eight, 
+                                    (unsigned char *) &nine};
+    int i, j;
+    float image[image_height * image_width];
+    float probabilities[10];
+
+    load_memory(memory);
+
+    for (i=0; i<sizeof(image_list)/sizeof(image_list[0]); i++) {
+        print_char_image(image_list[i], image_height, image_width, 1);
+        scale(image_list[i], image, image_height * image_width);
+        memcpy(memory+size_of_weights, image, image_height * image_width * 1 * sizeof(float));
+
+        sw_auto_infer(memory, size_of_weights, probabilities);
+
+        printf("prediction: \n");
+        for (j=0; j<10; j++) {
+           printf("%d = %8.6f \n", j, probabilities[j]);
+        }
+        printf("\n");
+    }  
+}
 
 int main()
 {
     // possible values for *input_image are "zero" through "nine" //
-    unsigned char *input_image = (unsigned char *) one;
+    unsigned char *input_image = (unsigned char *) three;
     float sw_prob[10];
     float hw_prob[10];
     int errors = 0;
@@ -450,7 +285,7 @@ int main()
     // sweep();
     // test_conv2d();
     // test_dense();
-    // return 0;
+    // all_digits(sw_memory);
 
     printf("start sw: \n");
     sw_inference(input_image, sw_memory, sw_prob);
@@ -459,7 +294,10 @@ int main()
     hw_inference(input_image, hw_memory, hw_prob);
 
     for (i=0; i<10; i++) {
-        if (sw_prob[i] != hw_prob[i]) errors++;
+        if (sw_prob[i] != hw_prob[i]) {
+           printf("%d: hw: %f sw: %f \n", i, hw_prob[i], sw_prob[i]);
+           errors++;
+        }
     }
 
     if (errors) {

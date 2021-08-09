@@ -1,6 +1,20 @@
 import numpy as np
 import struct
 
+class Layer_rec:
+   name = ''
+   input_address = 0
+   input_size = 0
+   input_shape = ()
+   weight_shape = ()
+   weight_size = 0
+   weight_address = 0
+   bias_size = 0
+   bias_address = 0
+   out_shape = ()
+   out_size = 0
+   out_address = 0
+
 def floatToBits(f):
    return np.fromstring(np.float32(f).tostring(), dtype='<u4')[0]
 
@@ -11,385 +25,624 @@ def uint(n):
      return n
   return 0xFFFFFFFF + n + 1
 
+#===== print software inference function calls =====
 
-def write_image(name, a, header_file):
-   header_file.write("  unsigned char " + name + "[28][28] = { \n")
-   for row in range(a.shape[0]):
-     header_file.write("         { ");
-     for col in range(a.shape[1]):
-        if (a[row][col]>0):
-           header_file.write("0x{:02x}".format(a[row][col]))
-        else :
-           header_file.write("   0");
-        if (col < a.shape[1]-1):
-           header_file.write(", ")
-     if (row < a.shape[0]-1):
-        header_file.write(" }, \n");
-     else:
-        header_file.write(" }  \n");
-   header_file.write("     }; \n")
-
-def number_string(i):
-   if (i == 0): 
-      return "zero"
-   if (i == 1): 
-      return "one"
-   if (i == 2):
-      return "two"
-   if (i== 3):
-      return "three"
-   if (i == 4):
-      return "four"
-   if (i == 5):
-      return "five"
-   if (i == 6):
-      return "six"
-   if (i == 7):
-      return "seven"
-   if (i == 8):
-      return "eight"
-   if (i == 9):
-      return "nine"
-   return None
+def print_inference_prolog(source_file):
+   source_file.write('#include "sw_infer.h"  \n');
+   source_file.write('  \n');
+   source_file.write('void sw_auto_infer(float *memory, int image_offset, float *probabilities) \n')
+   source_file.write('{ \n');
 
 
-def write_test_images(xtest, ytest):
-   header_file = open("test_images.h", "w")
+def print_convolution_call(source_file, layer, weight_ptr, input_ptr, max_pool):
 
-   for num in range(10):
-      i = 0
-      while (ytest[i] != num) :
-         i = i + 1
-      write_image(number_string(ytest[i]), xtest[i], header_file)
+   in_shape = layer.input_shape
+   in_size = in_shape[1] * in_shape[2] * in_shape[3]
+   weight_size = layer.kernel.shape[0] * layer.kernel.shape[1] * layer.kernel.shape[2] * layer.kernel.shape[3];
 
-   header_file.close()
+   source_file.write(' \n')
+   source_file.write('   conv2d_sw( \n');
+   source_file.write('       memory + {:d},  // offset of input images \n'.format(input_ptr))
+   source_file.write('       memory + {:d},  // offset of weights      \n'.format(weight_ptr))
+   if layer.use_bias:
+      source_file.write('       memory + {:d},  // offset of biases       \n'.format(weight_ptr+weight_size))
+   else:
+      source_file.write('       memory + 0,     // biases are not used    \n')
+   source_file.write('       memory + {:d},  // offset of output images \n'.format(input_ptr+in_size))
+   source_file.write('       {:d},           // number of input images  \n'.format(layer.input_shape[3]))
+   source_file.write('       {:d},           // number of output images \n'.format(layer.output_shape[3]))
+   source_file.write('       {:d},           // height                  \n'.format(layer.input_shape[1]))
+   source_file.write('       {:d},           // width                   \n'.format(layer.input_shape[2]))
+   source_file.write('       {:d},           // kernel height           \n'.format(layer.kernel.shape[0]))
+   source_file.write('       {:d},           // kernel width            \n'.format(layer.kernel.shape[1]))
+   if max_pool:
+      source_file.write('       1,          // apply max pooling          \n')
+   else:
+      source_file.write('       0,          // don\'t apply max pooling \n')
+   if layer.activation.__name__ == 'relu':
+      source_file.write('       1,          // apply relu              \n')
+   else:
+      source_file.write('       0,          // don\'t apply relu        \n')
+   if layer.use_bias:
+      source_file.write('       1);         // apply bias              \n')
+   else:
+      source_file.write('       0);         // don\'t apply bias        \n')
+ 
 
-def write_convolution_weights(w, layer, header, data, base, image_height, image_width):
+def print_dense_call(source_file, layer, weight_ptr, input_ptr):
 
-   out_size = int(w.shape[3] * image_height * image_width / 4)
+   in_shape = layer.input_shape;
+   in_size = in_shape[1]
+   weight_size = layer.kernel.shape[0] * layer.kernel.shape[1]
+
+   source_file.write(' \n');
+   source_file.write('   dense_sw( \n');
+   source_file.write('       memory + {:d},  // offset of input images \n'.format(input_ptr))
+   source_file.write('       memory + {:d},  // offset of weights      \n'.format(weight_ptr))
+   if layer.use_bias:
+      source_file.write('       memory + {:d},  // offset of biases       \n'.format(weight_ptr+weight_size))
+   else:
+      source_file.write('       memory + 0,     // biases are not used    \n')
+   source_file.write('       memory + {:d},  // offset of output images          \n'.format(input_ptr+in_size))
+   source_file.write('       {:d},           // number of rows in input images   \n'.format(1))
+   source_file.write('       {:d},           // number of cols in input images   \n'.format(layer.kernel.shape[0]))
+   source_file.write('       {:d},           // number of output images          \n'.format(layer.kernel.shape[1]))
+   if layer.activation.__name__ == 'relu':
+      source_file.write('       1,          // apply relu              \n')
+   else:
+      source_file.write('       0,          // don\'t apply relu        \n')
+   if layer.use_bias:
+      source_file.write('       1);         // apply bias              \n')
+   else:
+      source_file.write('       0);         // don\'t apply_bias        \n')
+
+
+def print_softmax_call(source_file, layer, input_ptr):
+
+   if layer.name[:5] == 'dense':
+      size = layer.compute_output_shape(layer.input_shape)[1]
+   else:
+      print('not yet implemened! ')
+
+   source_file.write(' \n')
+   source_file.write('   softmax(memory + {:d}, memory + {:d}, {:d}); \n'.format(input_ptr, input_ptr + size, size))
+
+
+def print_inference_epilog(source_file, output_offset, output_size):
+   source_file.write(' \n')
+   source_file.write('   memcpy(probabilities, memory + {:d}, {:d} * sizeof(float)); \n'.format(output_offset, output_size));
+   source_file.write('} \n')
+   source_file.write(' \n')
+
+
+def print_sw_inference(model, source_file):
+
+   print_inference_prolog(source_file)
+
+   height = model.input_shape[1]
+   width = model.input_shape[2]
+   input_images = model.input_shape[3]
+
+   input_size = height * width * input_images
+
+   weight_ptr = 0
+   input_ptr = sum_of_all_weights(model)
+   output_ptr = input_ptr + input_size
+
+   for i in range(len(model.layers)):
+      layer = model.layers[i]
+
+      print('layer: ', i)
+      print('weight_ptr: ', weight_ptr)
+      print('input_ptr: ', input_ptr)
+      print('output_ptr: ', output_ptr)
+
+      if layer.name[:6] == 'conv2d':
+         max_pool = False
+         out_shape = layer.compute_output_shape(layer.input_shape)
+         if (i + 1 < len(model.layers)):
+            if model.layers[i+1].name[:8] == 'max_pool':
+               max_pool = True;
+               out_shape = model.layers[i+1].output_shape
+               print('max pool output_shape: ', out_shape)
+
+         print_convolution_call(source_file, layer, weight_ptr, input_ptr, max_pool)
+
+         weight_size = layer.kernel.shape[0] * layer.kernel.shape[1] * layer.kernel.shape[2] * layer.kernel.shape[3]
+         out_size = out_shape[1] * out_shape[2] * out_shape[3]
+         in_size = layer.input_shape[1] * layer.input_shape[2] * layer.input_shape[3]
+         print('out size: ', out_size)
+
+         if layer.use_bias:
+            weight_size += layer.bias.shape[0]
+
+         weight_ptr += weight_size
+         input_ptr += in_size
+         output_ptr += out_size
+
+      if layer.name[:5] == 'dense':
+         print_dense_call(source_file, layer, weight_ptr, input_ptr)
+
+         weight_size = layer.kernel.shape[0] * layer.kernel.shape[1];
+         out_size = layer.compute_output_shape(layer.input_shape)[1];
+         in_size = layer.input_shape[1]
+
+         if layer.use_bias:
+            weight_size += layer.bias.shape[0]
+
+         weight_ptr += weight_size
+         input_ptr += in_size
+         output_ptr += out_size
+      
+         if layer.activation.__name__ == 'softmax':
+             print_softmax_call(source_file, layer, input_ptr)
+             input_ptr += out_size
+
+   print_inference_epilog(source_file, input_ptr, out_size)
+
+
+#===== Print hw infernce function calls =====
+
+def hw_print_inference_prolog(source_file):
+   source_file.write('#include "hw_infer.h"  \n');
+   source_file.write('  \n');
+   source_file.write('void hw_auto_infer(float *memory, int image_offset, float *probabilities) \n')
+   source_file.write('{ \n');
+
+
+def hw_print_convolution_call(source_file, layer, weight_ptr, input_ptr, max_pool):
+
+   in_shape = layer.input_shape
+   in_size = in_shape[1] * in_shape[2] * in_shape[3]
+   weight_size = layer.kernel.shape[0] * layer.kernel.shape[1] * layer.kernel.shape[2] * layer.kernel.shape[3];
+
+   source_file.write(' \n')
+   source_file.write('   conv2d_hw( \n');
+   source_file.write('       memory,                                   \n')
+   source_file.write('       {:d},           // offset of input images \n'.format(input_ptr))
+   source_file.write('       {:d},           // offset of weights      \n'.format(weight_ptr))
+   if layer.use_bias:
+      source_file.write('       {:d},           // offset of biases       \n'.format(weight_ptr+weight_size))
+   else:
+      source_file.write('       0,              // biases are not used    \n')
+   source_file.write('       {:d},           // offset of output images \n'.format(input_ptr+in_size))
+   source_file.write('       {:d},           // number of input images  \n'.format(layer.input_shape[3]))
+   source_file.write('       {:d},           // number of output images \n'.format(layer.output_shape[3]))
+   source_file.write('       {:d},           // height                  \n'.format(layer.input_shape[1]))
+   source_file.write('       {:d},           // width                   \n'.format(layer.input_shape[2]))
+   source_file.write('       {:d},           // kernel height           \n'.format(layer.kernel.shape[0]))
+   source_file.write('       {:d},           // kernel width            \n'.format(layer.kernel.shape[1]))
+   if max_pool:
+      source_file.write('       1,          // apply max pooling          \n')
+   else:
+      source_file.write('       0,          // don\'t apply max pooling \n')
+   if layer.activation.__name__ == 'relu':
+      source_file.write('       1,          // apply relu              \n')
+   else:
+      source_file.write('       0,          // don\'t apply relu        \n')
+   if layer.use_bias:
+      source_file.write('       1);         // apply bias              \n')
+   else:
+      source_file.write('       0);         // don\'t apply bias        \n')
+ 
+
+def hw_print_dense_call(source_file, layer, weight_ptr, input_ptr):
+
+   in_shape = layer.input_shape;
+   in_size = in_shape[1]
+   weight_size = layer.kernel.shape[0] * layer.kernel.shape[1]
+
+   source_file.write(' \n');
+   source_file.write('   dense_hw( \n');
+   source_file.write('       memory,                                   \n')
+   source_file.write('       {:d},           // offset of input images \n'.format(input_ptr))
+   source_file.write('       {:d},           // offset of weights      \n'.format(weight_ptr))
+   if layer.use_bias:
+      source_file.write('       {:d},           // offset of biases       \n'.format(weight_ptr+weight_size))
+   else:
+      source_file.write('       0,              // biases are not used    \n')
+   source_file.write('       {:d},           // offset of output images          \n'.format(input_ptr+in_size))
+   source_file.write('       {:d},           // number of rows in input images   \n'.format(1))
+   source_file.write('       {:d},           // number of cols in input images   \n'.format(layer.kernel.shape[0]))
+   source_file.write('       {:d},           // number of output images          \n'.format(layer.kernel.shape[1]))
+   if layer.activation.__name__ == 'relu':
+      source_file.write('       1,          // apply relu              \n')
+   else:
+      source_file.write('       0,          // don\'t apply relu        \n')
+   if layer.use_bias:
+      source_file.write('       1);         // apply bias              \n')
+   else:
+      source_file.write('       0);         // don\'t apply_bias        \n')
+
+
+def hw_print_softmax_call(source_file, layer, input_ptr):
+
+   if layer.name[:5] == 'dense':
+      size = layer.compute_output_shape(layer.input_shape)[1]
+   else:
+      print('not yet implemened! ')
+
+   source_file.write(' \n')
+   source_file.write('   float softmax_in[{:d}];                        \n'.format(size))
+   source_file.write('   float softmax_out[{:d}];                       \n'.format(size))
+   source_file.write(' \n')
+   source_file.write('   copy_from_cat(memory, softmax_in, {:d}, {:d}); \n'.format(input_ptr, size))
+   source_file.write(' \n')
+   source_file.write('   softmax(softmax_in, softmax_out, {:d});         \n'.format(size))
+
+
+def hw_print_inference_epilog(source_file, output_offset, output_size, softmax):
+   source_file.write(' \n')
+   if softmax:
+      source_file.write('   memcpy(probabilities, softmax_out, {:d} * sizeof(float)); \n'.format(output_size))
+   else:
+      source_file.write('   copy_from_cat(memory, probabilities, {:d}, {:d});  \n'.format(output_offset, output_size))
+   source_file.write('} \n')
+   source_file.write(' \n')
+
+
+def print_hw_inference(model, source_file):
+
+   hw_print_inference_prolog(source_file)
+
+   height = model.input_shape[1]
+   width = model.input_shape[2]
+   input_images = model.input_shape[3]
+
+   input_size = height * width * input_images
+
+   weight_ptr = 0
+   input_ptr = sum_of_all_weights(model)
+   output_ptr = input_ptr + input_size
+
+   softmax = False
+
+   for i in range(len(model.layers)):
+      layer = model.layers[i]
+
+      print('layer: ', i)
+      print('weight_ptr: ', weight_ptr)
+      print('input_ptr: ', input_ptr)
+      print('output_ptr: ', output_ptr)
+
+      if layer.name[:6] == 'conv2d':
+         max_pool = False
+         out_shape = layer.compute_output_shape(layer.input_shape)
+         if (i + 1 < len(model.layers)):
+            if model.layers[i+1].name[:8] == 'max_pool':
+               max_pool = True;
+               out_shape = model.layers[i+1].output_shape
+               print('max pool output_shape: ', out_shape)
+
+         hw_print_convolution_call(source_file, layer, weight_ptr, input_ptr, max_pool)
+
+         weight_size = layer.kernel.shape[0] * layer.kernel.shape[1] * layer.kernel.shape[2] * layer.kernel.shape[3]
+         out_size = out_shape[1] * out_shape[2] * out_shape[3]
+         in_size = layer.input_shape[1] * layer.input_shape[2] * layer.input_shape[3]
+         print('out size: ', out_size)
+
+         if layer.use_bias:
+            weight_size += layer.bias.shape[0]
+
+         weight_ptr += weight_size
+         input_ptr += in_size
+         output_ptr += out_size
+
+      if layer.name[:5] == 'dense':
+         hw_print_dense_call(source_file, layer, weight_ptr, input_ptr)
+
+         weight_size = layer.kernel.shape[0] * layer.kernel.shape[1];
+         out_size = layer.compute_output_shape(layer.input_shape)[1];
+         in_size = layer.input_shape[1]
+
+         if layer.use_bias:
+            weight_size += layer.bias.shape[0]
+
+         weight_ptr += weight_size
+         input_ptr += in_size
+         output_ptr += out_size
+      
+         if layer.activation.__name__ == 'softmax':
+             hw_print_softmax_call(source_file, layer, input_ptr)
+             input_ptr += out_size
+             softmax = True
+
+   hw_print_inference_epilog(source_file, input_ptr, out_size, softmax)
+
+
+
+#===== Write header file for offsets into memory =====
+
+
+def write_convolution_weights(layer, n, header, data, source, weight_ptr, input_ptr, max_pool, max_pool_shape):
+
+   image_height = layer.input_shape[1]
+   image_width  = layer.input_shape[2]
+
+   if max_pool:
+      out_shape = max_pool_shape
+   else:
+      out_shape = layer.compute_output_shape(layer.input_shape)
+
+   out_size = out_shape[1] * out_shape[2] * out_shape[3]
 
    count = 0
-   for out_image in range(w.shape[3]):
-      for in_image in range(w.shape[2]): 
-         for r in range(w.shape[1]):
-            for c in range(w.shape[0]):
-               data.write(struct.pack('<f', w[r][c][in_image][out_image].numpy()))
+   for out_image in range(layer.kernel.shape[3]):
+      for in_image in range(layer.kernel.shape[2]): 
+         for r in range(layer.kernel.shape[1]):
+            for c in range(layer.kernel.shape[0]):
+               data.write(struct.pack('<f', layer.kernel[r][c][in_image][out_image].numpy()))
                count += 1
-   print('wrote: ', count, ' words')
 
-   size = w.shape[0] * w.shape[1] * w.shape[2] * w.shape[3];
+   weight_size = layer.kernel.shape[0] * layer.kernel.shape[1] * layer.kernel.shape[2] * layer.kernel.shape[3];
 
-   header.write("      \n")
-   header.write("   //=======layer {:d} - convolution===============================   \n".format(layer))
-   header.write("      \n")
-   header.write("   static const int layer{:d}_input_images       = {:d};  \n".format(layer, w.shape[2]))
-   header.write("   static const int layer{:d}_output_images      = {:d};  \n".format(layer, w.shape[3]))
-   header.write("   static const int layer{:d}_weights_rows       = {:d};  \n".format(layer, w.shape[1]))
-   header.write("   static const int layer{:d}_weights_cols       = {:d};  \n".format(layer, w.shape[0]))
-   header.write("      \n");
-   header.write("   static const int layer{:d}_num_weights        = {:d};  \n".format(layer, w.shape[0]*w.shape[1]*w.shape[2]*w.shape[3]))
-   header.write("      \n")
-   header.write("   static const int layer{:d}_weight_offset      = {:d};  \n".format(layer, base))
-   header.write("   static const int layer{:d}_out_size           = {:d};  \n".format(layer, out_size))
-   header.write("      \n")
+   header.write('      \n')
+   header.write('   //=======layer {:d} - convolution===============================   \n'.format(n))
+   header.write('      \n')
+   header.write('   static const int layer{:d}_input_images       = {:d};  \n'.format(n, layer.kernel.shape[2]))
+   header.write('   static const int layer{:d}_output_images      = {:d};  \n'.format(n, layer.kernel.shape[3]))
+   header.write('   static const int layer{:d}_weights_rows       = {:d};  \n'.format(n, layer.kernel.shape[1]))
+   header.write('   static const int layer{:d}_weights_cols       = {:d};  \n'.format(n, layer.kernel.shape[0]))
+   header.write('      \n');
+   header.write('   static const int layer{:d}_num_weights        = {:d};  \n'.format(n, weight_size))
+   header.write('      \n')
+   header.write('   static const int layer{:d}_weight_offset      = {:d};  \n'.format(n, weight_ptr))
+   header.write('   static const int layer{:d}_out_size           = {:d};  \n'.format(n, out_size))
+   header.write('      \n')
 
-   return w.shape[0] * w.shape[1] * w.shape[2] * w.shape[3], out_size;
+   return weight_size, out_size;
 
 
-def write_dense_weights(w, layer, header, data, base):
+def write_dense_weights(layer, n, header, data, source, weight_ptr, input_ptr):
 
    count = 0
-   for i in range(w.shape[1]):
-      for c in range(w.shape[0]):
-         data.write(struct.pack('<f', w[c][i].numpy()))
+   out_shape = layer.compute_output_shape(layer.input_shape);
+   out_size = out_shape[1]
+   weight_size = layer.kernel.shape[0] * layer.kernel.shape[1];
+
+   for i in range(layer.kernel.shape[1]):
+      for c in range(layer.kernel.shape[0]):
+         data.write(struct.pack('<f', layer.kernel[c][i].numpy()))
          count += 1
-   print('wrote: ', count, ' words')
                
-   header.write("      \n")
-   header.write("   //=======layer {:d} - dense=====================================   \n".format(layer))
-   header.write("      \n");
-   header.write("   static const int layer{:d}_weights_rows       = {:d}; \n".format(layer, w.shape[1]));
-   header.write("   static const int layer{:d}_weights_cols       = {:d}; \n".format(layer, w.shape[0]));
-   header.write("      \n");
-   header.write("   static const int layer{:d}_num_weights        = {:d};  \n".format(layer, w.shape[0]*w.shape[1]))
-   header.write("      \n")
-   header.write("   static const int layer{:d}_weight_offset      = {:d};  \n".format(layer, base))
-   header.write("   static const int layer{:d}_out_size           = {:d};  \n".format(layer, w.shape[1]));
-   header.write("      \n")
-   header.write("      \n")
+   header.write('      \n')
+   header.write('   //=======layer {:d} - dense=====================================   \n'.format(n))
+   header.write('      \n');
+   header.write('   static const int layer{:d}_weights_rows       = {:d}; \n'.format(n, layer.kernel.shape[1]));
+   header.write('   static const int layer{:d}_weights_cols       = {:d}; \n'.format(n, layer.kernel.shape[0]));
+   header.write('      \n');
+   header.write('   static const int layer{:d}_num_weights        = {:d};  \n'.format(n, layer.kernel.shape[0]*layer.kernel.shape[1]))
+   header.write('      \n')
+   header.write('   static const int layer{:d}_weight_offset      = {:d};  \n'.format(n, weight_ptr))
+   header.write('   static const int layer{:d}_out_size           = {:d};  \n'.format(n, layer.kernel.shape[1]));
+   header.write('      \n')
+   header.write('      \n')
 
-   return w.shape[0] * w.shape[1], w.shape[1];
+   return weight_size, out_size
 
-def write_biases(b, layer, header, data, base):
+def write_biases(layer, n, header, data, base):
 
-   header.write("      \n");
-   header.write("   static const int layer{:d}_num_bias_values    = {:d};  \n".format(layer, b.shape[0]))
-   header.write("   static const int layer{:d}_bias_offset        = {:d};  \n".format(layer, base))
-   header.write("      \n")
-   header.write("      \n")
+   num_values = layer.bias.shape[0]
 
-   for i in range(b.shape[0]):
-      data.write(struct.pack('<f', b[i].numpy()))
+   header.write('      \n');
+   header.write('   static const int layer{:d}_num_bias_values    = {:d};  \n'.format(n, num_values))
+   header.write('   static const int layer{:d}_bias_offset        = {:d};  \n'.format(n, base))
+   header.write('      \n')
+   header.write('      \n')
 
-   return b.shape[0];
+   for i in range(num_values):
+      data.write(struct.pack('<f', layer.bias[i].numpy()))
 
-def memimg_convolution_weights(header, memimg, fixed_file, w, layer, address, packing_factor=1, word_size=0, integer_bits=0):
-   if word_size == 0:
-      word_size = int(32/packing_factor)
-      if integer_bits==0:
-          integer_bits = int(word_size/2)
-      fractional_bits = word_size - integer_bits
+   return num_values;
 
-   # header.write("   static const int   layer{:d}_weight_offset      = {:d}; \n".format(layer, address))
-
-   for out_image in range(w.shape[3]):
-      for in_image in range(w.shape[2]):
-         for r in range(w.shape[1]):
-            for c in range(w.shape[0]):
-               memimg.write("{:08x} \n".format(floatToBits(w[r][c][in_image][out_image])))
-
-   for out_image in range(w.shape[3]):
-      for in_image in range(w.shape[2]):
-         values = []
-         for r in range(w.shape[1]):
-            for c in range(w.shape[0]):
-               values.append(w[r][c][in_image][out_image].numpy());
-         for i in range(int(((w.shape[0]*w.shape[1])+(packing_factor-1))/packing_factor)):
-            value = 0
-            for p in range(packing_factor):
-               index = i * packing_factor + p
-               shift_factor = 1 << (word_size * p)
-               factor =  1 << fractional_bits
-               mask = (1 << word_size) - 1
-               if index<len(values):
-                  new_bits = values[index] * factor
-                  new_bits = uint(new_bits)
-                  new_bits = new_bits & mask
-                  new_bits = new_bits * shift_factor
-                  value = value + new_bits
-
-            fixed_file.write("{:08x} \n".format(uint(value)))
-
-   unit_offset_factor  = int(((w.shape[0] *w.shape[1]) + (packing_factor-1))/packing_factor)
-   layer_offset_factor = unit_offset_factor * (w.shape[2] * w.shape[3])
-
-   header.write("      \n")
-   header.write("   static const int layer{:d}_input_images         = {:d};  \n".format(layer, w.shape[2]))
-   header.write("   static const int layer{:d}_output_images        = {:d};  \n".format(layer, w.shape[3]))
-   header.write("   static const int layer{:d}_weights_rows         = {:d};  \n".format(layer, w.shape[1]))
-   header.write("   static const int layer{:d}_weights_cols         = {:d};  \n".format(layer, w.shape[0]))
-   header.write("      \n")
-   header.write("   static const int layer{:d}_num_weights          = {:d};  \n".format(layer, w.shape[0]*w.shape[1]*w.shape[2]*w.shape[3]))
-   header.write("   static const int layer{:d}_unit_size            = {:d};  \n".format(layer, w.shape[0]*w.shape[1]))
-   header.write("   static const int layer{:d}_unit_offset_factor   = {:d};  \n".format(layer, unit_offset_factor))
-   header.write("   static const int later{:d}_unit_count           = {:d};  \n".format(layer, w.shape[2]*w.shape[3]))
-   header.write("      \n")
-   if (layer==1):   
-      header.write("   static const int layer1_weight_offset           = 0;  \n")
-   header.write("   static const int layer{:d}_weight_offset        = layer{:d}_weight_offset + {:d};  \n".format(layer+1, layer, layer_offset_factor))
-   header.write("      \n")
-   header.write("      \n")
+def sum_of_all_weights(model):
    
-   return layer_offset_factor
-   return w.shape[0] * w.shape[1] * w.shape[2] * w.shape[3];
+   sum = 0;
+
+   for layer in model.layers:
+      if layer.name[:6] == 'conv2d':
+         dims = layer.get_weights()[0].shape;
+         size = dims[0] * dims[1] * dims [2] * dims [3]
+         if layer.use_bias:
+            size += len(layer.get_weights()[1])
+         sum += size;
+      if layer.name[:5] == 'dense':
+         dims = layer.get_weights()[0].shape;
+         size = dims[0] * dims[1]
+         if layer.use_bias:
+            size += len(layer.get_weights()[1])
+         sum += size;
+   return sum
+
+def print_layer_map(layer_list):
+
+   print(' ')
+   print(' Weight map: ')
+   print(' ')
+   for layer_rec in layer_list:
+      print('    {:16s}'.format(layer_rec.name), end='')
+
+      print(' {:18s}'.format(str(layer_rec.weight_shape)),end='')
+      print(' {:8d}'.format(layer_rec.weight_size), end='')
+      print(' {:10d}'.format(layer_rec.weight_address), end='')
+      weight_end = layer_rec.weight_address + layer_rec.weight_size - 1
+      if weight_end < 0: weight_end = 0
+      print(' {:10d}'.format(weight_end), end='')
+
+      if layer_rec.bias_size > 0:
+         print(' ')
+         print('    {:16s}'.format('  bias'), end='')
+         print(' {:18s}'.format('('+str(layer_rec.bias_size)+')'),end='')
+         print(' {:8d}'.format(layer_rec.bias_size), end='')
+         print(' {:10d}'.format(layer_rec.bias_address), end='')
+         print(' {:10d}'.format(layer_rec.bias_address + layer_rec.bias_size -1), end='')
+
+      print(' ')
+   print(' ')
+
+def print_input_map(input_shape, start_addr):
+   print(' ')
+   print(' Input map: ')
+   print(' ')
+
+   print('    input image     ', end='')
+
+   size = input_shape[1] * input_shape[2] * input_shape[3]
+
+   print(' {:18s}'.format(str(input_shape)),end='')
+   print(' {:8d}'.format(size), end='')
+   print(' {:10d}'.format(start_addr), end='')
+   print(' {:10d}'.format(start_addr + size -1), end='')
+   print(' ')
+   print(' ')
+
+def print_output_map(layer_list):
+ 
+   print(' ')
+   print(' Output map: ')
+   print(' ')
    
-def memimg_dense_weights(header, memimg, fixed_file, w, layer, count, address, packing_factor=1, word_size=0, integer_bits=0):
-   if word_size == 0:
-      word_size = int(32/packing_factor)
-      if integer_bits==0:
-          integer_bits = int(word_size/2)
-      fractional_bits = word_size - integer_bits
+   for layer_rec in layer_list:
+      print('    {:16s}'.format(layer_rec.name), end='')
 
-   print('word_size: ', word_size, ' int_bits: ', integer_bits, ' frac_bits: ', fractional_bits)
-   # header.write("   static const int   layer{:d}_weight_offset      = {:d}; \n".format(layer, address))
-   
-   for i in range(w.shape[1]):
-      for c in range(count):
-         for j in range(int(w.shape[0]/count)):
-            memimg.write("{:08x} \n".format(floatToBits(w[j*count+c][i])));
+      print(' {:18s}'.format(str(layer_rec.out_shape)),end='')
+      print(' {:8d}'.format(layer_rec.out_size), end='')
+      print(' {:10d}'.format(layer_rec.out_address), end='')
+      out_end = layer_rec.out_address + layer_rec.out_size - 1
+      if out_end < 0: out_end = 0
+      print(' {:10d}'.format(out_end), end='')
+      print(' ')
 
-   for i in range(w.shape[1]):
-      values = []
-      for c in range(count):
-         for j in range(int(w.shape[0]/count)):
-            values.append(w[j*count+c][i].numpy());
-
-      for j in range(int((w.shape[0] + (packing_factor-1))/packing_factor)):
-         value = 0;
-         for p in range(packing_factor):
-            index = j * packing_factor + p
-            shift_factor = 1 << (word_size * p)
-            factor =  1 << fractional_bits
-            mask = (1 << word_size) - 1
-            if index<len(values):
-               new_bits = values[index] * factor
-               new_bits = uint(new_bits)
-               new_bits = new_bits & mask
-               print('original: ', values[index], ' bits: ', new_bits, ' factor: ', factor)
-               new_bits = new_bits * shift_factor
-               value = value + new_bits
-
-         fixed_file.write("{:08x} \n".format(uint(value)))
-
-   unit_offset_factor  = int((w.shape[0] + (packing_factor-1))/packing_factor)
-   layer_offset_factor = unit_offset_factor * w.shape[1]
-
-   header.write("      \n");
-   header.write("   static const int layer{:d}_weights_rows = {:d}; \n".format(layer, w.shape[1]));
-   header.write("   static const int layer{:d}_weights_cols = {:d}; \n".format(layer, w.shape[0]));
-   header.write("      \n");
-   header.write("   static const int layer{:d}_num_weights        = {:d};  \n".format(layer, w.shape[0]*w.shape[1]))
-   header.write("   static const int layer{:d}_unit_size          = {:d};  \n".format(layer, w.shape[0]))
-   header.write("   static const int layer{:d}_unit_offset_factor = {:d};  \n".format(layer, unit_offset_factor))
-   header.write("   static const int later{:d}_unit_count         = {:d};  \n".format(layer, w.shape[1]))
-   header.write("      \n")
-   if (layer==1):   
-      header.write("   static const int layer1_weight_offset         = 0;  \n")
-   header.write("   static const int layer{:d}_weight_offset      = layer{:d}_weight_offset + {:d};  \n".format(layer+1, layer, layer_offset_factor))
-   header.write("      \n")
-   header.write("      \n")
-
-   return layer_offset_factor
-   return w.shape[0] * w.shape[1]
+   print(' ')
 
 
-def memimg_biases(header, memimg, fixed_file, b, layer, address):
-   header.write("   static const int   layer{:d}_biase_offset       = {:d}; \n".format(layer, address))
-   for i in range(b.shape[0]):
-      memimg.write("{:08x} \n".format(floatToBits(b[i])));
-      fixed_file.write("{:08x} \n".format(uint(0x10000 * b[i])));
+def print_memory_map(layer_list, model, input_image_address):
+   print(' ')
+   print('    Layer            Shape                  Size      Start        End')
+   print_layer_map(layer_list)
+   print_input_map(model.layers[0].input_shape, input_image_address)
+   print_output_map(layer_list)
 
-   return b.shape[0];
+
+def write_header_file(model):
+
+   header_file = open('weights.h', 'w')
+   data_file   = open('weights_float.bin', 'w+b')
+   source_file = open('auto_infer.c', 'w')
+
+   height = model.input_shape[1]
+   width = model.input_shape[2]
+   input_images = model.input_shape[3]
+
+   input_size = height * width * input_images
+
+   weight_ptr = 0
+   input_ptr = sum_of_all_weights(model)
+   input_image_address = input_ptr
+   output_ptr = input_ptr + input_size
+   n = 1
+
+   layer_num = 1
+
+   layer_list = []
+
+   for n in range(len(model.layers)):
+
+      layer_list.append(Layer_rec())
+
+      layer = model.layers[n]
+
+      layer_list[n].name = layer.name
+
+      if layer.name[:6] == 'conv2d':
+          if (n + 1) < len(model.layers):
+             if (model.layers[n+1].name[:8] == 'max_pool'):
+                max_pool = True
+                max_pool_shape = model.layers[n+1].output_shape
+             else:
+                max_pool = False
+                max_pool_shape = ()
+
+          weight_size, out_size = write_convolution_weights(layer, layer_num, header_file, data_file, source_file, weight_ptr, input_ptr, max_pool, max_pool_shape)
+
+          in_size = layer.input_shape[1] * layer.input_shape[2] * layer.input_shape[3]
+          output_ptr = input_ptr + in_size
+
+          layer_list[n].weight_address = weight_ptr
+          layer_list[n].weight_size = weight_size
+          layer_list[n].weight_shape = layer.kernel.shape
+
+          layer_list[n].out_address = output_ptr
+          layer_list[n].out_size = out_size
+
+          if max_pool:
+             layer_list[n].out_shape = max_pool_shape
+          else:
+             layer_list[n].out_shape = layer.output_shape[1:]
+
+          input_ptr += in_size
+          weight_ptr += weight_size
+          if layer.use_bias:
+              weight_size = write_biases (layer, layer_num, header_file, data_file, weight_ptr)
+
+              layer_list[n].bias_address = weight_ptr
+              layer_list[n].bias_size = layer.bias.shape[0]
+ 
+              weight_ptr += weight_size
+          layer_num += 1
+          if layer.activation.__name__ == 'softmax':
+              input_pointer += out_size
+
+      if layer.name[:5] == 'dense':
+          print('Layer #', layer_num, ' dense')
+          weight_size, out_size = write_dense_weights(layer, layer_num, header_file, data_file, source_file, weight_ptr, input_ptr)
+
+          in_size = layer.input_shape[1] 
+          output_ptr = input_ptr + in_size
+          layer_list[n].weight_address = weight_ptr
+          layer_list[n].weight_size = weight_size
+          layer_list[n].weight_shape = layer.kernel.shape
+
+          layer_list[n].out_address = output_ptr
+          layer_list[n].out_size = out_size
+          layer_list[n].out_shape = layer.output_shape[1:]
+
+          input_ptr += in_size
+          weight_ptr += weight_size
+          if layer.use_bias:
+              weight_size = write_biases (layer, layer_num, header_file, data_file, weight_ptr)
+
+              layer_list[n].bias_address = weight_ptr
+              layer_list[n].bias_size = layer.bias.shape[0]
+ 
+              weight_ptr += weight_size
+
+          layer_num += 1
+          if layer.activation.__name__ == 'softmax':
+              input_ptr += out_size
 
 
-def write_header_file(weights, height, width, include_bias=False):
-   header_file = open("weights.h", "w")
-   data_file   = open("weights_float.bin", "w+b")
+   header_file.write(' \n');
+   header_file.write('   //=======End of layers==========================================   \n'.format(layer))
+   header_file.write(' \n');
+   header_file.write(' \n');
+   header_file.write('   static int const image_height              = {:d}; \n'.format(height))
+   header_file.write('   static int const image_width               = {:d}; \n'.format(width))
+   header_file.write('   static int const image_size                = {:d}; \n'.format(height*width))
+   header_file.write('   static int const num_images                = {:d}; \n'.format(input_images))
+   header_file.write(' \n');
 
-   current_address = 0
-   size_of_outputs = 0
-   layer = 1
-   weight_index = 0
+   header_file.write('   static int const size_of_weights           = {:d}; \n'.format(weight_ptr))
+   header_file.write('   static int const size_of_outputs           = {:d}; \n'.format(input_ptr))
+   header_file.write(' \n');
 
-   print("Layer #1")
-   weight_size, out_size = write_convolution_weights (weights[weight_index], layer, header_file, data_file, current_address, height, width)
-   current_address += weight_size
-   size_of_outputs += out_size
-
-   weight_index += 1
-   if include_bias:
-      current_address += write_biases (weights[weight_index], layer, header_file, data_file, current_address)
-      weight_index += 1
-   layer += 1
-
-   print("Layer #2")
-   weight_size, out_size = write_dense_weights (weights[weight_index], layer, header_file, data_file, current_address)
-   current_address += weight_size
-   size_of_outputs += out_size
-
-   weight_index += 1
-   if include_bias:
-      current_address += write_biases (weights[weight_index], layer, header_file, data_file, current_address)
-      weight_index += 1
-   layer += 1
-
-   print("Layer #3")
-   weight_size, out_size = write_dense_weights (weights[weight_index], layer, header_file, data_file, current_address)
-   current_address += weight_size
-   size_of_outputs += out_size
-
-   weight_index += 1
-   if include_bias:
-      current_address += write_biases (weights[weight_index], layer, header_file, data_file, current_address)
-      weight_index += 1
-   layer += 1
-
-   header_file.write(" \n");
-   header_file.write("   //=======End of layers==========================================   \n".format(layer))
-   header_file.write(" \n");
-   header_file.write(" \n");
-   header_file.write("   static int const image_height              = {:d}; \n".format(height))
-   header_file.write("   static int const image_width               = {:d}; \n".format(width))
-   header_file.write("   static int const image_size                = {:d}; \n".format(height*width))
-   header_file.write(" \n");
-
-   header_file.write("   static int const size_of_weights           = {:d}; \n".format(current_address))
-   header_file.write("   static int const size_of_outputs           = {:d}; \n".format(size_of_outputs))
-   header_file.write(" \n");
+   print_sw_inference(model, source_file)
+   print_hw_inference(model, source_file)
 
    header_file.close()
    data_file.close()
+   source_file.close()
+   
+   print_memory_map(layer_list, model, input_image_address)
 
-
-def write_memory_image_file(weights, height, width, include_bias=False, base_address=0x40000000):
-
-   packing_factor=1
-
-   header_file = open("weights_embedded.h", "w")
-   memory_image_file = open("weights.mem", "w")
-   fixed_memory_file = open("fixed_weights.mem", "w")
-   weight_size = 1;
-
-   layer = 1
-   weight_index = 0
-
-   current_address = 0
-
-   header_file.write(" \n");
-   header_file.write("   static const int   base_address              = 0x{:x}; \n".format(base_address))
-   header_file.write(" \n");
-
-   print("layer #1")
-   size = memimg_convolution_weights(header_file, memory_image_file, fixed_memory_file, weights[weight_index], layer, current_address, packing_factor=packing_factor)
-   weight_index += 1
-   current_address += size * weight_size
-   print("Convolution weights: ", size)
-   if include_bias:
-      size = memimg_biases(header_file, memory_image_file, fixed_memory_file, weights[weight_index], layer, current_address)
-      weight_index += 1
-      current_address += size * weight_size
-      print("Bias weights: ", size)
-   layer += 1
-
-   print("layer #2")
-   size = memimg_convolution_weights(header_file, memory_image_file, fixed_memory_file, weights[weight_index], layer, current_address, packing_factor=packing_factor)
-   weight_index += 1
-   current_address += size * weight_size
-   print("Convolution weights: ", size)
-   if include_bias:
-      size = memimg_biases(header_file, memory_image_file, fixed_memory_file, weights[weight_index], layer, current_address)
-      weight_index += 1
-      current_address += size * weight_size
-      print("Bias weights: ", size)
-   layer += 1
-
-   if include_bias:
-      input_size = weights[weight_index-2].shape[3]
-   else:
-      input_size = weights[weight_index-1].shape[3]
-
-   print("layer #3")
-   size = memimg_dense_weights(header_file, memory_image_file, fixed_memory_file, weights[weight_index], layer, input_size, current_address, packing_factor=packing_factor)
-   weight_index += 1
-   current_address += size * weight_size
-   print("Dense weights: ", size)
-   if include_bias:
-      size = memimg_biases(header_file, memory_image_file, fixed_memory_file, weights[weight_index], layer, current_address)
-      weight_index += 1
-      current_address += size * weight_size
-      print("Bias weights: ", size)
-   layer += 1
-
-   print("end_address: ", current_address);
-
-   header_file.write(" \n");
-   header_file.write("   static const int   image_height              = {:d}; \n".format(height))
-   header_file.write("   static const int   image_width               = {:d}; \n".format(width))
-   header_file.write(" \n");
-
-   header_file.write("   static const int   top_of_weights            = {:d}; \n".format(current_address))
-   header_file.write(" \n");
-   header_file.close()
-   memory_image_file.close()
-   fixed_memory_file.close()
-
+   return layer_list
