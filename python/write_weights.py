@@ -186,7 +186,7 @@ def print_sw_inference(model, source_file):
 def hw_print_inference_prolog(source_file):
    source_file.write('#include "hw_infer.h"  \n');
    source_file.write('  \n');
-   source_file.write('void hw_auto_infer(float *memory, int image_offset, float *probabilities) \n')
+   source_file.write('void hw_auto_infer(cat_memory_type *memory, int image_offset, float *probabilities) \n')
    source_file.write('{ \n');
 
 
@@ -524,11 +524,63 @@ def print_memory_map(layer_list, model, input_image_address):
    print_output_map(layer_list)
 
 
+def print_region_header(layer_list, model, input_image_address):
+   region_header = open('regions.h', 'w')
+
+   region_header.write('#ifndef REGIONS_H_INCLUDED \n')
+   region_header.write('#define REGIONS_H_INCLUDED \n')
+   region_header.write('\n')
+   region_header.write('\n')
+   region_header.write('static unsigned int region_map[][2] = { \n')
+   size = 0
+   for layer in layer_list:
+      if layer.weight_size > 0:
+         region_header.write('  {{ {:10d}, {:10d} }},  // {:s} weights \n'.format(layer.weight_address, layer.weight_size, layer.name))
+         size += layer.weight_size
+      if layer.bias_size > 0:
+         region_header.write('  {{ {:10d}, {:10d} }},  // {:s} biases \n'.format(layer.bias_address, layer.bias_size, layer.name))
+         size += layer.bias_size
+   input_size = model.layers[0].input_shape[1] * model.layers[0].input_shape[2] * model.layers[0].input_shape[3]
+   region_header.write('  {{ {:10d}, {:10d} }},  // input_image \n'.format(input_image_address, input_size))
+   size += input_size
+   for layer in layer_list:
+      if layer.out_size > 0:
+         region_header.write('  {{ {:10d}, {:10d} }},  // {:s} outputs \n'.format(layer.out_address, layer.out_size, layer.name))
+         size += layer.out_size
+   region_header.write('  {{ {:10d}, {:10d} }}   // out of bounds \n'.format(size, 0xFFFFFFFF))
+   region_header.write('}; \n')
+   region_header.write(' \n');
+
+   region_header.write(' \n')
+   region_header.write('static char region_names[][40] = { \n')
+   size = 0
+   for layer in layer_list:
+      if layer.weight_size > 0:
+         region_header.write('  {{ "{:s} weights" }}, \n'.format(layer.name))
+      if layer.bias_size > 0:
+         region_header.write('  {{ "{:s} biases " }}, \n'.format(layer.name))
+   region_header.write('  { "input image " }, \n')
+   for layer in layer_list:
+      if layer.out_size > 0:
+         region_header.write('  {{ "{:s} outputs " }}, \n'.format(layer.name))
+   region_header.write('  { "out of bounds " } \n');
+   region_header.write('}; \n')
+   region_header.write('\n');
+   region_header.write('#endif \n');
+
+   region_header.close()
+
 def write_header_file(model):
 
    header_file = open('weights.h', 'w')
    data_file   = open('weights_float.bin', 'w+b')
    source_file = open('auto_infer.c', 'w')
+
+
+   header_file.write('#ifndef WEIGHTS_H_INCLUDED \n')
+   header_file.write('#define WEIGHTS_H_INCLUDED \n')
+   header_file.write('\n')
+   header_file.write('\n')
 
    height = model.input_shape[1]
    width = model.input_shape[2]
@@ -636,6 +688,10 @@ def write_header_file(model):
    header_file.write('   static int const size_of_outputs           = {:d}; \n'.format(input_ptr))
    header_file.write(' \n');
 
+   header_file.write(' \n')
+   header_file.write('#endif \n')
+   header_file.write(' \n')
+
    print_sw_inference(model, source_file)
    print_hw_inference(model, source_file)
 
@@ -644,5 +700,6 @@ def write_header_file(model):
    source_file.close()
    
    print_memory_map(layer_list, model, input_image_address)
+   print_region_header(layer_list, model, input_image_address)
 
    return layer_list

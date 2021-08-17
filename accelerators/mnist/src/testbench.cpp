@@ -3,17 +3,18 @@
 #include <math.h>
 #include <string.h>
 
+#include "defines.h"
+
 #include "weights.h"
 #include "test_images.h"
 
 #include "cat_access.h"
+#include "catapult_accel.h"
 
 #include "sw_infer.h"
 #include "hw_infer.h"
 
 #include "diags.h"
-
-static const char program_name[] = "mnist_inference";
 
 //=====Debug routines========================//
 
@@ -82,12 +83,14 @@ void print_cat_image(cat_memory_type *memory, int image_offset, int height, int 
     int r;
     int c;
     int i;
+    hw_cat_type value;
 
     for (i=0; i<count; i++) {
         for (r=0; r<height; r++) {
             for (c=0; c<width; c++) {
-                if (memory[image_offset + i * height * width + r * width + c] > 0.001) {
-                    printf("%5.3f, ", memory[image_offset + i * height * width + r * width + c]);
+                value = get_cat_value(memory, image_offset + i * height * width + r * width + c);
+                if (value.to_double() > 0.001) {
+                    printf("%5.3f, ", value.to_double());
                 } else {
                     printf("  -    ");
                 }
@@ -103,11 +106,13 @@ void print_cat_kernel(cat_memory_type *memory, int kernel_offset, int kernel_hei
     int r;
     int c;
     int i;
+    hw_cat_type value;
 
     for (i=0; i<count; i++) {
         for (r=0; r<kernel_height; r++) {
             for (c=0; c<kernel_width; c++) {
-                printf("%5.3f, ", memory[kernel_offset + i * kernel_height * kernel_width + r * kernel_width + c]);
+                value = get_cat_value(memory, kernel_offset + i * kernel_height * kernel_width + r * kernel_width + c);
+                printf("%5.3f, ", value.to_double());
             }
             printf("\n");
         }
@@ -139,13 +144,11 @@ void softmax(
     }
 }
 
-void load_memory(cat_memory_type *memory)
+void load_memory(float *memory)
 {
-    int i;
-    int r;
-    
-    // only neccesary when running on the host, when embedded the weights will be loaded into memory
 
+#ifdef HOST     // only neccesary when running on the host, when embedded the weights will be loaded into memory
+    size_t r;
     FILE *weight_database;
     char *weight_path; 
     char weight_base_filename[] = "weights_float.bin";
@@ -173,6 +176,8 @@ void load_memory(cat_memory_type *memory)
     }
 
     fclose(weight_database);
+
+#endif
 }
 
 
@@ -215,13 +220,12 @@ void hw_inference(unsigned char *input_image, cat_memory_type *memory, float *pr
 {
     float image[image_height * image_width * 1];
     int image_offset = size_of_weights;
-    float p[10];
     int i;
     const int chatty = 1;
 
     scale(input_image, image, image_height * image_width);
 
-    load_memory(memory);
+    load_cat_memory(memory);
 
     copy_to_cat(memory, image_offset, image, image_height * image_width * layer1_input_images);
 
@@ -270,6 +274,20 @@ void all_digits(float *memory)
     }  
 }
 
+int not_close(float a, float b)
+{
+    if (a > b) {
+       if ((a - b) > 0.001) return 1; else return 0;
+    }
+
+    if (b > a) {
+       if ((b - a) > 0.001) return 1; else return 0;
+    }
+
+    return 0;
+}
+
+
 int main()
 {
     // possible values for *input_image are "zero" through "nine" //
@@ -294,7 +312,7 @@ int main()
     hw_inference(input_image, hw_memory, hw_prob);
 
     for (i=0; i<10; i++) {
-        if (sw_prob[i] != hw_prob[i]) {
+        if (not_close(sw_prob[i], hw_prob[i])) {
            printf("%d: hw: %f sw: %f \n", i, hw_prob[i], sw_prob[i]);
            errors++;
         }
@@ -302,6 +320,7 @@ int main()
 
     if (errors) {
         printf("Test failed, hw does not match sw! \n");
+        record_differences(sw_memory, hw_memory, size_of_outputs);
         return 1;
     } else {
         printf("Test passed! \n");
@@ -310,4 +329,3 @@ int main()
 
     return 0;
 }
-

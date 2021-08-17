@@ -1,5 +1,5 @@
 
-CATAPULT_HOME    ?= /wv/hlsb/CATAPULT/10.5a/PRODUCTION/aol/Mgc_home
+CATAPULT_HOME    ?= /wv/hlsb/CATAPULT/10.6a/PRODUCTION/aol/Mgc_home
 
 #==============================================
 
@@ -7,7 +7,7 @@ FUNCTION         ?= conv_par_in
 ACCEL_NAME       ?= cat_accel
 PAR              ?= 1
 
-SOURCES          = testbench.cpp hw_infer.cpp sw_infer.cpp cat_access.cpp diags.cpp
+SOURCES          = testbench.cpp hw_infer.cpp sw_infer.cpp cat_access.cpp diags.cpp catapult_accel.cpp
 SPEC_FILE        = $(FUNCTION).spec
 HEADERS          = cat_access.h hw_infer.h sw_infer.h diags.h mnist_par.hpp 
 
@@ -24,7 +24,8 @@ CATAPULT_FLAGS   = -shell -file master_par$(PAR).tcl
 
 ifgen            = ../../../if_gen/if_gen_axi
 
-INCLUDES         = -I $(CATAPULT_HOME)/shared/include -I ../../../include -I .
+#INCLUDES         = -I $(CATAPULT_HOME)/shared/include -I ../../../include -I .
+INCLUDES         = -I ~/catapult/include -I ../../../include -I .
 
 OPTS             += -D FIXED_POINT -D WEIGHT_MEMORY -D MASTER -D A53
 
@@ -32,7 +33,7 @@ export WEIGHT_PATH = ../../../data
 
 .PHONY: all run_host clean
 
-#all: $(ACCELERATOR) $(HEADER) $(BUS_IF) $(HOST_EXE)
+all: $(ACCELERATOR) $(HEADER) $(BUS_IF) $(HOST_EXE)
 
 run_host: $(HOST_EXE)
 	@echo "Running host testbench"

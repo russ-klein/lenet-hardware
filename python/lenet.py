@@ -6,16 +6,16 @@ from keras.utils import np_utils
 
 # define LeNet model
 def lenet_model():
-        # create model
-        model = Sequential()
-        model.add(Conv2D(20, (5,5), use_bias=True, padding="same", activation=None, input_shape=(28,28,1)))
-        model.add(MaxPooling2D(pool_size=(2,2)))
-        model.add(Flatten())
-        model.add(Dense(500, use_bias=True, kernel_initializer='normal', activation='relu'))
-        model.add(Dense(10, use_bias=True, kernel_initializer='normal', activation='softmax'))
-        # Compile model
-        model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-        return model
+    # create model
+    model = Sequential()
+    model.add(Conv2D(20, (5,5), use_bias=True, padding="same", activation=None, input_shape=(28,28,1)))
+    model.add(MaxPooling2D(pool_size=(2,2)))
+    model.add(Flatten())
+    model.add(Dense(500, use_bias=True, kernel_initializer='normal', activation='relu'))
+    model.add(Dense(10, use_bias=True, kernel_initializer='normal', activation='softmax'))
+    # Compile model
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    return model
 
 def train_network(batch_size=200, epochs=20):
     # load data
@@ -35,13 +35,9 @@ def train_network(batch_size=200, epochs=20):
     y_train = np_utils.to_categorical(y_train)
     y_test = np_utils.to_categorical(y_test)
     
-    num_classes = y_test.shape[1]
-    
-    
     model = lenet_model()
     model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=epochs, batch_size=batch_size, verbose=1)
     scores = model.evaluate(X_test, y_test, verbose=0)
     print("Baseline Error: %.2f%%" % (100-scores[1]*100))
    
     return model
-

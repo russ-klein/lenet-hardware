@@ -1,8 +1,9 @@
 #include <stdio.h>
 
+#include "defines.h"
 #include "hw_infer.h"
 
-void print_image(float *f, int h, int w, int c);
+void print_image(hw_cat_type *f, int h, int w, int c);
 
 static int in_bounds(
               int r,
@@ -34,7 +35,7 @@ static int weight_offset(int row, int col, int input_image, int output_image, in
 
 #define WEIGHT_OFFSET(ROW, COL, IN_IMAGE, OUT_IMAGE) weight_offset(ROW, COL, IN_IMAGE, OUT_IMAGE, filter_height, filter_width, num_input_images, num_output_images)
 
-void conv2d_hw(
+void conv2d_hw_algorithmic(
                cat_memory_type *memory,
                int image,
                int weights,
@@ -51,12 +52,12 @@ void conv2d_hw(
                int bias)
 {
     int  o, i, fr, fc, r, c, rr, cc, r1, c1;
-    float sum;
-    float max;
-    float n;
-    float image_value;
-    float weight_value;
-    float bias_value;
+    hw_cat_type sum;
+    hw_cat_type max;
+    hw_cat_type n;
+    hw_cat_type image_value;
+    hw_cat_type weight_value;
+    hw_cat_type bias_value;
     int image_index;
     int weight_index;
     int output_index;
@@ -86,8 +87,14 @@ void conv2d_hw(
                                 image_value = get_cat_value(memory, image + image_index); // image[image_index];
                                 weight_value = get_cat_value(memory, weights + weight_index); // weights[weight_index];
 
-                                if (chatty) printf("image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
+                                #ifdef FIXED_POINT
+                                  if (chatty) printf("image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
+                                                   image_index, weight_index, image_value.to_double(), weight_value.to_double(), 
+                                                   image_value.to_double() * weight_value.to_double());
+                                #else
+                                  if (chatty) printf("image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
                                                    image_index, weight_index, image_value, weight_value, image_value * weight_value);
+                                #endif
                                 sum += image_value * weight_value;
                             }
                         }
@@ -95,7 +102,11 @@ void conv2d_hw(
                     output_index = OUT_OFFSET(r, c, o);
                     if (i==0) n = sum; else n = sum + get_cat_value(memory, output_image + output_index); // output_image[output_index];
                     set_cat_value(memory, output_image + output_index, n); //output_image[output_index] = n;
-                    if (chatty) printf("output[%d] = %5.3f \n", output_index, n);
+                    #ifdef FIXED_POINT
+                      if (chatty) printf("output[%d] = %5.3f \n", output_index, n.to_double());
+                    #else
+                      if (chatty) printf("output[%d] = %5.3f \n", output_index, n);
+                    #endif
                 }
             }
         }
@@ -148,7 +159,7 @@ void conv2d_hw(
 
 
 
-void dense_hw(
+void dense_hw_algorithmic(
               cat_memory_type *memory,
               int input_image,
               int weights,
@@ -162,8 +173,8 @@ void dense_hw(
 {
 
     int i, n, c;
-    float sum;
-    float bias_value;
+    hw_cat_type sum;
+    hw_cat_type bias_value;
     int chatty = 0;
 
     for (i=0; i<output_image_elements; i++) {
@@ -192,10 +203,10 @@ void dense_hw(
 }
 /*
 void new_dense_hw(
-              float *input_image,
-              float *weights,
-              float *biases,
-              float *output_image,
+              hw_cat_type *input_image,
+              hw_cat_type *weights,
+              hw_cat_type *biases,
+              hw_cat_type *output_image,
               int input_image_elements,
               int output_image_elements,
               int relu,
@@ -203,8 +214,8 @@ void new_dense_hw(
 {
 
     int i, o;
-    float sum;
-    float bias_value;
+    hw_cat_type sum;
+    hw_cat_type bias_value;
     int chatty = 0;
 
     for (o=0; o<output_image_elements; o++) {
