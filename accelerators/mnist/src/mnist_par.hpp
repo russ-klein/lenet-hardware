@@ -1291,7 +1291,6 @@ void conv_par_in(
 #endif
     
     go.read();
-printf("started \n");
     if (convolve) {
         
 #ifdef SLAVE
@@ -1379,8 +1378,6 @@ printf("started \n");
         
         if (use_bias) for (i=0; i<num_output_images; i++) bias_values[i] = read_from_system_memory(memory, bias_offset + i);
         
-        if (relu) printf("using relu\n");
-        if (use_bias) printf("using bias\n");
         count = 0;
         out_pointer = 0;
         while (count<num_output_images) {
