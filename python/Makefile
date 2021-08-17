@@ -3,8 +3,6 @@ PYTHON  = python
 MOVE    = mv
 REMOVE  = rm -rf
 
-#dumb as fuck
-
 INCLUDE = ../include
 DATA    = ../data
 
