@@ -11,7 +11,7 @@
 #define FILTER_HEIGHT 5
 #define FILTER_WIDTH  5
 #define STRIDE        2
-#define MAXPOOL       1
+#define MAXPOOL       0
 #define RELU          0
 #define BIAS          0
 
@@ -81,11 +81,46 @@ void relu(float *f, int height, int width)
     }
 } 
 
+int test_2_conv2d()
+{
+    float image[1 * 3 * 3];
+    float filter1[2 * 3 * 3];
+    float stage[2 * 3 * 3];
+    float filter2[4 * 3 * 3];
+    float output[2 * 3 * 3];
+    int i;
+
+    for (i=0; i<9; i++) image[i] = ((float)i)/10.0;
+
+    for (i=0; i<18; i++) filter1[i] = 0.0; 
+    filter1[4] = 0.0;
+    filter1[13] = 1.0;
+
+    for (i=0; i<36; i++) filter2[i] = 0.0;
+    filter2[4]  = 0.5;
+    filter2[13] = 0.5;
+    filter2[22] = 1.0;
+    filter2[31] = 1.0;
+
+    conv2d_sw(image, filter1, NULL, stage, 1, 2, 3, 3, 3, 3, 0, 0, 0);
+    conv2d_sw(stage, filter2, NULL, output, 2, 2, 3, 3, 3, 3, 0, 0, 0);
+
+    printf("starting image: \n");
+    print_image(image, 3, 3, 1);
+
+    printf("imtermediate results: \n");
+    print_image(stage, 3, 3, 2);
+
+    printf("resulting image: \n");
+    print_image(output, 3, 3, 2);
+
+    return(0);
+}
 
 int test_conv2d()
 {
     float image[IMAGE_SIZE * IMAGES_IN];
-    float filter[FILTER_SIZE * IMAGES_OUT];
+    float filter[FILTER_SIZE * IMAGES_IN * IMAGES_OUT];
     float biases[1];
     float output[IMAGE_SIZE * IMAGES_OUT];
     int i;
@@ -97,7 +132,7 @@ int test_conv2d()
     for (i=0; i<FILTER_SIZE * IMAGES_IN * IMAGES_OUT; i++) filter[i] = 0.0;
 
     for (i=0; i<IMAGES_OUT; i++) {
-       filter[i * FILTER_SIZE + FILTER_SIZE/2] = (float) i+1;
+       filter[i * FILTER_SIZE + FILTER_SIZE/2] = ((float) i) + 1.0;
     }
   
 

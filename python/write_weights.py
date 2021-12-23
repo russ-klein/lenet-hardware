@@ -71,6 +71,9 @@ def print_convolution_call(source_file, layer, weight_ptr, input_ptr, max_pool):
 
 def print_dense_call(source_file, layer, weight_ptr, input_ptr):
 
+   print('input shape: ', layer.input_shape)
+   print('output shape: ', layer.output_shape)
+
    in_shape = layer.input_shape;
    in_size = in_shape[1]
    weight_size = layer.kernel.shape[0] * layer.kernel.shape[1]
@@ -393,18 +396,22 @@ def write_convolution_weights(layer, n, header, data, source, weight_ptr, input_
    return weight_size, out_size;
 
 
-def write_dense_weights(layer, n, header, data, source, weight_ptr, input_ptr):
+def write_dense_weights(layer, n, header, data, source, weight_ptr, input_ptr, images):
 
    count = 0
    out_shape = layer.compute_output_shape(layer.input_shape);
    out_size = out_shape[1]
    weight_size = layer.kernel.shape[0] * layer.kernel.shape[1];
 
+   image_size = int(layer.kernel.shape[0]/images)
    for i in range(layer.kernel.shape[1]):
-      for c in range(layer.kernel.shape[0]):
-         data.write(struct.pack('<f', layer.kernel[c][i].numpy()))
-         count += 1
-               
+      for img in range(images):
+         for c in range(image_size):
+            idx = c * images + img
+            #print('dense[',idx,'][',i,'] = ', layer.kernel[idx][i].numpy())
+            data.write(struct.pack('<f', layer.kernel[idx][i].numpy()))
+            count += 1
+
    header.write('      \n')
    header.write('   //=======layer {:d} - dense=====================================   \n'.format(n))
    header.write('      \n');
@@ -647,7 +654,12 @@ def write_header_file(model):
 
       if layer.name[:5] == 'dense':
           print('Layer #', layer_num, ' dense')
-          weight_size, out_size = write_dense_weights(layer, layer_num, header_file, data_file, source_file, weight_ptr, input_ptr)
+          images = 1
+          if n>0:
+              if model.layers[n-1].name[:7] == 'flatten':
+                  images = model.layers[n-1].input_shape[3]
+
+          weight_size, out_size = write_dense_weights(layer, layer_num, header_file, data_file, source_file, weight_ptr, input_ptr, images)
 
           in_size = layer.input_shape[1] 
           output_ptr = input_ptr + in_size

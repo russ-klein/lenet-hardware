@@ -82,17 +82,17 @@ void conv2d_hw_algorithmic(
                             if (in_bounds(rr, cc, height, width)) {
 
                                 image_index = IN_OFFSET(rr, cc, i);
-                                weight_index = WEIGHT_OFFSET(fr, fc, o, i);
+                                weight_index = WEIGHT_OFFSET(fr, fc, i, o);
 
                                 image_value = get_cat_value(memory, image + image_index); // image[image_index];
                                 weight_value = get_cat_value(memory, weights + weight_index); // weights[weight_index];
 
                                 #ifdef FIXED_POINT
-                                  if (chatty) printf("image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
+                                if (chatty) printf("HW image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
                                                    image_index, weight_index, image_value.to_double(), weight_value.to_double(), 
                                                    image_value.to_double() * weight_value.to_double());
                                 #else
-                                  if (chatty) printf("image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
+                                if (chatty) printf("HW image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
                                                    image_index, weight_index, image_value, weight_value, image_value * weight_value);
                                 #endif
                                 sum += image_value * weight_value;

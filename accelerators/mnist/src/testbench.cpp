@@ -227,7 +227,7 @@ void hw_inference(unsigned char *input_image, cat_memory_type *memory, float *pr
 
     load_cat_memory(memory);
 
-    copy_to_cat(memory, image_offset, image, image_height * image_width * layer1_input_images);
+    copy_to_cat(memory, image_offset, image, image_height * image_width * 1); // layer1_input_images);
 
     hw_auto_infer(memory, image_offset, probabilities);
 
@@ -304,6 +304,7 @@ int main()
     // test_conv2d();
     // test_dense();
     // all_digits(sw_memory);
+    // test_2_conv2d();
 
     printf("start sw: \n");
     sw_inference(input_image, sw_memory, sw_prob);
@@ -318,9 +319,9 @@ int main()
         }
     }
 
+    record_differences(sw_memory, hw_memory, size_of_outputs);
     if (errors) {
         printf("Test failed, hw does not match sw! \n");
-        record_differences(sw_memory, hw_memory, size_of_outputs);
         return 1;
     } else {
         printf("Test passed! \n");
@@ -329,3 +330,4 @@ int main()
 
     return 0;
 }
+

@@ -17,15 +17,14 @@ HEADER           = ../sw/$(FUNCTION).h
 
 HOST_EXE         = testbench
 
-CRUFT            = Catapult* catapult.log make.out design_checker_constraints.tcl design_checker_pre_build.tcl catapult.pinfo
+CRUFT            = Catapult* catapult.log make.out design_checker_constraints.tcl design_checker_pre_build.tcl catapult.pinfo differences.txt
 
 CATAPULT         = $(CATAPULT_HOME)/bin/catapult
 CATAPULT_FLAGS   = -shell -file master_par$(PAR).tcl
 
 ifgen            = ../../../if_gen/if_gen_axi
 
-#INCLUDES         = -I $(CATAPULT_HOME)/shared/include -I ../../../include -I .
-INCLUDES         = -I ~/catapult/include -I ../../../include -I .
+INCLUDES         = -I $(CATAPULT_HOME)/shared/include -I ../../../include -I .
 
 OPTS             += -D FIXED_POINT -D WEIGHT_MEMORY -D MASTER -D A53
 

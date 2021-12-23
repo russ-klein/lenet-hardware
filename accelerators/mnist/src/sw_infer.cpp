@@ -20,9 +20,14 @@ static inline int in_bounds(
 
 static inline int offset(int row, int col, int image, int height, int width, int images)
 {
-    int image_offset = (row * width) + col;
-    int array_offset = (image_offset * images) + image;
-    return array_offset;
+    // int image_offset = (row * width) + col;
+    // int array_offset = (image_offset * images) + image;
+    // return array_offset;
+
+    int start_of_array = image * height * width;
+    int pixel_offset = (row * width) + col;
+     
+    return start_of_array + pixel_offset;
 }
 
 #define OUT_OFFSET(ROW, COL, IMAGE) offset(ROW, COL, IMAGE, height, width, num_output_images)
@@ -34,6 +39,9 @@ static inline int weight_offset(int row, int col, int input_image, int output_im
 }
 
 #define WEIGHT_OFFSET(ROW, COL, IN_IMAGE, OUT_IMAGE) weight_offset(ROW, COL, IN_IMAGE, OUT_IMAGE, filter_height, filter_width, num_input_images, num_output_images)
+
+void print_float_image(float *image, int height, int width, int count);
+void print_float_kernel(float *kernel, int kernel_height, int kernel_width, int count);
 
 void conv2d_sw(
                float *image,
@@ -61,14 +69,10 @@ void conv2d_sw(
     int weight_index;
     int output_index;
     int input_index;
-    int input_base;
-    int output_base;
-    const int size = height * width;
-    const int filter_size = filter_height * filter_width;
 
     const int stride = 2;
     const int chatty = 0;
-
+    
     for (o=0; o<num_output_images; o++) {
         for (i=0; i<num_input_images; i++) {
             for (r=0; r<height; r++) {
@@ -84,12 +88,12 @@ void conv2d_sw(
                                 // weight_index = o * filter_size * num_input_images + i * filter_size + fr * filter_width + fc;
 
                                 image_index = IN_OFFSET(rr, cc, i);
-                                weight_index = WEIGHT_OFFSET(fr, fc, o, i);
+                                weight_index = WEIGHT_OFFSET(fr, fc, i, o);
 
                                 image_value = image[image_index];
                                 weight_value = weights[weight_index];
 
-                                if (chatty) printf("image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
+                                if (chatty) printf("SW image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
                                                    image_index, weight_index, image_value, weight_value, image_value * weight_value);
                                 sum += image_value * weight_value;
                             }
