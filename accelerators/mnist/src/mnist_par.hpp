@@ -1,3 +1,4 @@
+#define VAR_SIZE 
 //
 //  conv_par_in.hpp
 //  mnist_inference
@@ -8,24 +9,28 @@
 #ifndef conv_par_in_hpp
 #define conv_par_in_hpp
 
-#define HEIGHT        28
-#define WIDTH         28
-#define AREA          (HEIGHT * WIDTH)
-#define FILTER_HEIGHT  5
-#define FILTER_WIDTH   5
-#define FILTER_AREA   (FILTER_HEIGHT * FILTER_WIDTH)
+#define HEIGHT              28
+#define WIDTH               28
+#define AREA                (HEIGHT * WIDTH)
+#define FILTER_HEIGHT        5
+#define FILTER_WIDTH         5
+#define FILTER_AREA         (FILTER_HEIGHT * FILTER_WIDTH)
 
-#define INDEX_BITS    25
-#define FILTER_BITS    5
-#define PAR_BITS      (PAR_IN + BUS_WIDTH)
+#define INDEX_BITS          25
+#define FILTER_BITS          5
+#define PAR_BITS            (PAR_IN + BUS_WIDTH)
 
-#define MARGIN ((WIDTH * ((FILTER_HEIGHT - 1) / 2)) + ((FILTER_WIDTH - 1) / 2))
-#define MARGIN_ROUND_UP ( STRIDE * (((MARGIN) + (STRIDE - 1)) / (STRIDE)))
-#define TAIL   ((WIDTH * ((FILTER_HEIGHT - 1) / 2)) - ((FILTER_WIDTH - 1) / 2)) + FILTER_WIDTH + (STRIDE - 1)
-#define TAIL_ROUND_UP  ( STRIDE * (((TAIL) + (STRIDE - 1)) / (STRIDE)))
+#define HALF_FILTER_HEIGHT  ((FILTER_HEIGHT - 1) / 2)
+#define HALF_FILTER_WIDTH   ((FILTER_WIDTH  - 1) / 2)
+#define MARGIN              ((WIDTH * HALF_FILTER_HEIGHT) + HALF_FILTER_WIDTH)
+#define TAIL                ((WIDTH * HALF_FILTER_HEIGHT) - HALF_FILTER_WIDTH) + FILTER_WIDTH + (STRIDE - 1)
+#define SHIFT_REGISTER_SIZE ((WIDTH * (FILTER_HEIGHT - 1)) + FILTER_WIDTH)
 
-#define SHIFT_REGISTER_SIZE  ((MARGIN) + (TAIL_ROUND_UP))
+// round up incresed the size so it is an even multiple of bus operations 
+// use these only for defining memory regions to store values pulled in across the bus
 
+#define MARGIN_ROUND_UP     ( STRIDE * (((MARGIN) + (STRIDE - 1)) / (STRIDE)))
+#define TAIL_ROUND_UP       ( STRIDE * (((TAIL)   + (STRIDE - 1)) / (STRIDE)))
 
 typedef ac_int<INDEX_BITS, true>    index_type;
 typedef ac_int<FILTER_BITS, false>  filter_index_type;
@@ -260,22 +265,11 @@ void add(index_type &row, index_type &col, index_type amount, index_type width)
     }
 }
 
-void compute_pr_pc(index_type row, index_type col, p_type p, index_type &pr, index_type &pc)
-{
-    pr = row;
-    pc = p + col;
-    if (pc >= WIDTH) {
-        pr = row + 1;
-        pc -= WIDTH;
-    }
-}
-
 hw_cat_type relu_fn(hw_cat_type n)
 {
     if (n<0) return 0;
     return n;
 }
-
 
 void read_line(hw_cat_type *data, index_type data_addr, raw_memory_line *array_memory, index_type array_addr, index_type size)
 {
@@ -952,10 +946,8 @@ hw_cat_type load_weights_and_multiply_master(raw_bus_type *memory, index_type of
         
 #endif
 
-void compute_row_col(index_type n, index_type &r, index_type &c)
+void compute_row_col(index_type n, index_type &r, index_type &c, index_type width)
 {
-    static const index_type width = WIDTH;
-    
     r = n / width;
     c = n % width;
     if (c<0) {
@@ -964,11 +956,12 @@ void compute_row_col(index_type n, index_type &r, index_type &c)
     }
 }
 
-void shift_by_stride(hw_cat_type *shift_register, hw_cat_type *input_image)
+void shift_by_stride(hw_cat_type *shift_register, hw_cat_type *input_image, index_type shift_register_size)
 {
     index_type sr;
     
     static const bool chatty = false;
+    static const index_type stride = STRIDE;
     
     if (chatty) {
         printf("Shifting in: ");
@@ -977,42 +970,47 @@ void shift_by_stride(hw_cat_type *shift_register, hw_cat_type *input_image)
     }
     
    #pragma hls_unroll
-    for (sr=0; sr<SHIFT_REGISTER_SIZE-STRIDE; sr++) {
+    // todo: pick good unroll factor, it is now variable (was constant)
+    for (sr=0; sr<shift_register_size-stride; sr++) {
         shift_register[sr] = shift_register[sr+STRIDE];
     }
     
    #pragma hls_unroll
-    for (sr=0; sr<STRIDE; sr++) {
-        shift_register[SHIFT_REGISTER_SIZE-STRIDE+sr] = input_image[sr];
+    for (sr=0; sr<stride; sr++) {
+        shift_register[shift_register_size-STRIDE+sr] = input_image[sr];
     }
 }
 
-void get_shift_in_values(hw_cat_type *values, raw_memory_line *image, index_type n, index_type num_words)
+void get_shift_in_values(
+    hw_cat_type *values, 
+    raw_memory_line *image, 
+    index_type offset, 
+    index_type num_words, 
+    index_type area)
 {
     hw_cat_type line[STRIDE];
     index_type size;
     p_type p;
 
-    static const index_type area = AREA;
     static const bool chatty = false;
     
     size = num_words;
     
-    if (n < 0) {
-        size = n + size;
+    if (offset < 0) {
+        size = offset + size;
         if (size > 0) {
-            copy_to_regs(line, -n, image, 0, size);
+            copy_to_regs(line, -offset, image, 0, size);
         }
     } else {
-        if ((n + size) > area) size = area - n;
+        if ((offset + size) > area) size = area - offset;
         if (size > 0) {
-            copy_to_regs(line, 0, image, n, size);
+            copy_to_regs(line, 0, image, offset, size);
         }
     }
     
    #pragma hls_unroll
     for (p=0; p<STRIDE; p++) {
-        values[p] = (((n + p) < 0) || ((n + p) >= area)) ? 0.0 : line[p];
+        values[p] = (((offset + p) < 0) || ((offset + p) >= area)) ? 0.0 : line[p];
     }
     if (chatty) {
         printf("shift in values: ");
@@ -1021,7 +1019,8 @@ void get_shift_in_values(hw_cat_type *values, raw_memory_line *image, index_type
     }
 }
 
-/*
+#ifdef VAR_SIZE
+
 void perform_convolution(
                          raw_memory_line   *input_image,
                          raw_memory_line   *filter,
@@ -1032,6 +1031,7 @@ void perform_convolution(
                          index_type         image_width)
 {
     hw_cat_type partial_sum_buffer[STRIDE];
+    hw_cat_type partial_sum_buffer2[STRIDE];
     hw_cat_type products[STRIDE][FILTER_HEIGHT * FILTER_WIDTH];
     hw_cat_type sums;
     hw_cat_type feature_load[STRIDE];
@@ -1065,29 +1065,17 @@ void perform_convolution(
     index_type cc;
     p_type p;
     
-    // static const index_type tail_round_up = TAIL_ROUND_UP - STRIDE;
-    // static const index_type margin_round_up = MARGIN_ROUND_UP;
-    // static const index_type area = AREA;
-    // static const index_type mid_point_height = (FILTER_HEIGHT - 1) / 2;
-    // static const index_type mid_point_width  = (FILTER_WIDTH - 1) / 2;
-    // static const index_type stride = STRIDE;
-    // static const index_type pixels_to_shift = AREA + SHIFT_REGISTER_SIZE;
-
-    static const index_type l_area                = image_height * image_width;
-    static const index_type l_margin              = ((image_width * ((FILTER_HEIGHT - 1) / 2)) + ((FILTER_WIDTH - 1) / 2));
-    static const index_type l_margin_round_up     = (STRIDE * (((l_margin) + (STRIDE - 1)) / (STRIDE)));
-    static const index_type l_tail                = ((image_width * ((FILTER_HEIGHT - 1) / 2)) - ((FILTER_WIDTH - 1) / 2)) + FILTER_WIDTH + (STRIDE - 1) ;
-    static const index_type l_tail_round_up       = (STRIDE * (((l_tail) + (STRIDE - 1)) / (STRIDE)));
-    static const index_type l_shift_register_size = ((l_margin) + (l_tail_round_up));
+    const index_type l_area                = image_height * image_width;
+    const index_type l_margin              = ((image_width * ((FILTER_HEIGHT - 1) / 2)) + ((FILTER_WIDTH - 1) / 2));
+    const index_type l_margin_round_up     = (STRIDE * (((l_margin) + (STRIDE - 1)) / (STRIDE)));
+    const index_type l_tail                = ((image_width * ((FILTER_HEIGHT - 1) / 2)) - ((FILTER_WIDTH - 1) / 2)) + FILTER_WIDTH + (STRIDE - 1) ;
+    const index_type l_tail_round_up       = ((STRIDE * (((l_tail) + (STRIDE - 1)) / (STRIDE))) - STRIDE);
+    const index_type l_shift_register_size = ((l_margin) + (l_tail));
      
-    //static const index_type tail_round_up = TAIL_ROUND_UP - STRIDE;
-    //static const index_type margin_round_up = MARGIN_ROUND_UP;
-    //static const index_type area = AREA;
-    static const index_type mid_point_height = (FILTER_HEIGHT - 1) / 2;
-    static const index_type mid_point_width  = (FILTER_WIDTH - 1) / 2;
-    static const index_type stride = STRIDE;
-    //static const index_type pixels_to_shift = AREA + SHIFT_REGISTER_SIZE;
-    static const index_type l_pixels_to_shift = l_area + l_shift_register_size;
+    const index_type mid_point_height = (FILTER_HEIGHT - 1) / 2;
+    const index_type mid_point_width  = (FILTER_WIDTH - 1) / 2;
+    const index_type stride = STRIDE;
+    const index_type l_pixels_to_shift = l_area + l_shift_register_size;
 
     static const bool chatty = false;
 
@@ -1105,26 +1093,24 @@ main_convolve_loop:
         target_pixel = tail_pixel - l_margin_round_up;
         lead_pixel = target_pixel - l_tail_round_up;
         
-        compute_row_col(lead_pixel, row, col);
-
-        get_shift_in_values(feature_load, input_image, target_pixel, stride);
+        get_shift_in_values(feature_load, input_image, target_pixel, stride, l_area);
         
-        shift_by_stride(shift_register, feature_load);
+        shift_by_stride(shift_register, feature_load, l_shift_register_size);
         
-        if ((target_pixel  < 0) || (target_pixel > l_area) || (input_image_number == 0)) {
+        if (input_image_number == 0) {
            #pragma hls_unroll
             for (p=0; p<STRIDE; p++) {
                 partial_sum_buffer[p] = bias; // 0.0;
             }
-        } else {
-            copy_to_regs(partial_sum_buffer, 0, output_image, lead_pixel, stride);
+        } else { 
+           get_shift_in_values(partial_sum_buffer, output_image, lead_pixel, stride, l_area);
         }
-        
+
        #pragma hls_unroll
         for (p=0; p<STRIDE; p++) {
             p_target_pixel = target_pixel + p;
             p_lead_pixel = lead_pixel + p;
-            compute_row_col(p_lead_pixel, pr, pc);
+            compute_row_col(p_lead_pixel, pr, pc, image_width);
             
             sums = 0;
             
@@ -1140,14 +1126,16 @@ main_convolve_loop:
                         
                         rr = pr + fr - mid_point_height;
                         cc = pc + fc - mid_point_width;
-                        shift_offset = fr * WIDTH + fc + p;
+                        shift_offset = fr * image_width + fc + p;
                         f_index = fr * FILTER_WIDTH + fc;
                         
-                        products[p][f_index] = (hw_in_bounds(rr, cc, HEIGHT, WIDTH)) ? filter_regs[f_index] * shift_register[shift_offset] : 0.0;
+                        products[p][f_index] = (hw_in_bounds(rr, cc, image_height, image_width)) ? filter_regs[f_index] * shift_register[shift_offset] : 0.0;
                         
                         if (chatty) {
-                            if (hw_in_bounds(rr, cc, HEIGHT, WIDTH)) {
-                                printf("image_value[%d][%d]: %5.3f weight_value: %5.3f \n", rr.to_int(), cc.to_int(), shift_register[shift_offset].to_double(), filter_regs[f_index].to_double());
+                            if (hw_in_bounds(rr, cc, image_height, image_width)) {
+                                printf("HW image_index: %d weight_index: %d image_value[%d][%d]: %5.3f weight_value: %5.3f = %5.3f \n", 
+                                        rr.to_int() * image_width.to_int() + cc.to_int(), f_index.to_int(), rr.to_int(), cc.to_int(), 
+                                        shift_register[shift_offset].to_double(), filter_regs[f_index].to_double(), products[p][f_index].to_double());
                             }
                         }
 
@@ -1155,11 +1143,14 @@ main_convolve_loop:
                     }
                 }
                 
-                if (chatty) printf("sum[%d][%d] = %5.3f \n", pr.to_int(), pc.to_int(), sums.to_double());
+                if (chatty) printf("output[%d] = %5.3f prior_sum: %5.3f \n", 
+                                    pr.to_int() * image_width.to_int() + pc.to_int(), sums.to_double(), partial_sum_buffer[p].to_double());
+                //if (chatty) printf("sum[%d][%d] = %5.3f prior sum: %5.3f \n", 
+                //                    pr.to_int(), pc.to_int(), sums.to_double(), partial_sum_buffer[p].to_double());
                 
                 partial_sum_buffer[p] += sums;
                 if (chatty) {
-                    if ((output_index % WIDTH)==0) printf("\n");
+                    if ((output_index % image_width)==0) printf("\n");
                     if (sums <0.001) printf("  -   ");
                     else printf("%5.2f ", sums.to_double());
                 }
@@ -1175,7 +1166,8 @@ main_convolve_loop:
     }
 }
 
-*/
+#else 
+
 void perform_convolution(
                          raw_memory_line   *input_image,
                          raw_memory_line   *filter,
@@ -1232,7 +1224,7 @@ void perform_convolution(
     // target_pixel = the number of the pixel at the center of the convolution kernel (lead_pixel + margin)
     // tail_pixel = the last pixel in the shift register (lead_pixel + shift_register_size)
     // total pixels needed to be shifted through is AREA + SHIFT_REGISTER_SIZE - (STRIDE -1)
-    
+
     copy_to_regs(filter_regs, 0, filter, 0, FILTER_AREA);
     
    #pragma hls_pipeline_init_interval 1
@@ -1242,11 +1234,9 @@ main_convolve_loop:
         target_pixel = tail_pixel - margin_round_up;
         lead_pixel = target_pixel - tail_round_up;
 
-        compute_row_col(lead_pixel, row, col);
-
-        get_shift_in_values(feature_load, input_image, target_pixel, stride);
+        get_shift_in_values(feature_load, input_image, target_pixel, stride, area);
         
-        shift_by_stride(shift_register, feature_load);
+        shift_by_stride(shift_register, feature_load, SHIFT_REGISTER_SIZE);
         
         if ((lead_pixel  < 0) || (lead_pixel > area) || (input_image_number == 0)) {
            #pragma hls_unroll
@@ -1261,7 +1251,7 @@ main_convolve_loop:
         for (p=0; p<STRIDE; p++) {
             p_target_pixel = target_pixel + p;
             p_lead_pixel = lead_pixel + p;
-            compute_row_col(p_lead_pixel, pr, pc);
+            compute_row_col(p_lead_pixel, pr, pc, WIDTH);
             
             sums = 0;
             
@@ -1312,6 +1302,9 @@ main_convolve_loop:
     }
 }
 
+#endif
+
+
 /* fixed size:
 
 void perform_relu(bool relu, raw_memory_line *image_out, raw_memory_line *image_in, index_type image_height, index_type image_width)
@@ -1342,7 +1335,7 @@ void perform_relu(bool relu, raw_memory_line *image_out, raw_memory_line *image_
     index_type i;
     
     static const index_type stride = STRIDE;
-    static const index_type l_area = image_height * image_width;
+    const index_type l_area = image_height * image_width;
     
    #pragma hls_pipeline_init_interval 1
     for (count = 0; count < l_area; count += stride) {
@@ -1370,9 +1363,9 @@ hw_cat_type max(hw_cat_type a, hw_cat_type b, hw_cat_type c, hw_cat_type d)
 void perform_max_pool(raw_memory_line *image_out, raw_memory_line *image_in, index_type image_height, index_type image_width)
 {
     // WARNING: hard-coded for stride of 2
-    static const index_type l_width      = image_width;
-    static const index_type l_out_height = image_height >> 1;
-    static const index_type l_out_width  = image_width >> 1;
+    const index_type l_width      = image_width;
+    const index_type l_out_height = image_height >> 1;
+    const index_type l_out_width  = image_width >> 1;
     
     hw_cat_type feature_lines[WIDTH*2];
     hw_cat_type max_line[WIDTH/2];
@@ -1470,7 +1463,7 @@ void conv_par_in(
     static const index_type stride = STRIDE;
 
 #endif
-    
+
     go.read();
     if (convolve) {
         

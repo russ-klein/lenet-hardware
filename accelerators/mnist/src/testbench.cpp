@@ -204,6 +204,8 @@ void sw_inference(unsigned char *input_image, float *memory, float *probabilitie
     load_memory(memory);
     memcpy(memory+image_offset, image, image_height * image_width * 1 * sizeof(float));
 
+    // print_float_image(memory + image_offset, 28, 28, 1);
+
     sw_auto_infer(memory, image_offset, probabilities);
 
     if (chatty) {
@@ -228,6 +230,8 @@ void hw_inference(unsigned char *input_image, cat_memory_type *memory, float *pr
     load_cat_memory(memory);
 
     copy_to_cat(memory, image_offset, image, image_height * image_width * 1); // layer1_input_images);
+
+    // print_cat_image(memory, image_offset, 28, 28, 1);
 
     hw_auto_infer(memory, image_offset, probabilities);
 

@@ -93,8 +93,8 @@ void conv2d_sw(
                                 image_value = image[image_index];
                                 weight_value = weights[weight_index];
 
-                                if (chatty) printf("SW image_index: %d weight_index: %d image_value: %5.3f weight_value: %5.3f = %5.3f \n",
-                                                   image_index, weight_index, image_value, weight_value, image_value * weight_value);
+                                if (chatty) printf("SW image_index: %d weight_index: %d image_value[%d][%d]: %5.3f weight_value: %5.3f = %5.3f \n",
+                                                   image_index, weight_index, rr, cc, image_value, weight_value, image_value * weight_value);
                                 sum += image_value * weight_value;
                             }
                         }
