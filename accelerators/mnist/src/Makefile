@@ -22,11 +22,15 @@ CRUFT            = Catapult* catapult.log make.out design_checker_constraints.tc
 CATAPULT         = $(CATAPULT_HOME)/bin/catapult
 CATAPULT_FLAGS   = -shell -file master_par$(PAR).tcl
 
-ifgen            = ../../../if_gen/if_gen_axi
+IFGEN_DIR        = ../../../if_gen
+IFGEN            = if_gen_axi
+IFGEN_CMD        = $(IFGEN_DIR)/$(IFGEN)
 
 INCLUDES         = -I $(CATAPULT_HOME)/shared/include -I ../../../include -I .
 
 OPTS             += -D FIXED_POINT -D WEIGHT_MEMORY -D MASTER -D A53
+
+QUIET_FLAG       = --no-print-directory
 
 export WEIGHT_PATH = ../../../data
 
@@ -39,29 +43,34 @@ run_host: $(HOST_EXE)
 	@./$(HOST_EXE)
 
 $(ACCELERATOR): $(SOURCES) $(HEADERS) master_par$(PAR).tcl
-	@echo "catapult $(SOURCES) -o $(ACCELERATOR)"
+	@echo "CAT      $(SOURCES) -o $(ACCELERATOR)"
 	@rm -rf $(CRUFT)
 	@$(CATAPULT) $(CATAPULT_FLAGS) >> make.out
 	@cp Catapult/*/concat_rtl.v $@
 	@rm -rf $(CRUFT)
 
 $(HOST_EXE): $(HEADERS) $(SOURCES) 
-	@echo "gcc $(SOURCES) -o $@"
+	@echo "GCC      $(SOURCES) -o $@"
 	@g++ -g -o $@ $(INCLUDES) -D HOST -D PAR_IN=$(PAR) -std=c++11 $(OPTS) $(SOURCES) >> make.out
 
-$(BUS_IF): $(SPEC_FILE) $(SOURCES)
-	@echo ifgen $(FUNCTION) $(SPEC_FILE) $(ACCEL_NAME) > $@
-	@$(ifgen) $(FUNCTION) $(SPEC_FILE) $(ACCEL_NAME)
+$(BUS_IF): $(SPEC_FILE) $(SOURCES) $(IFGEN_CMD)
+	@echo "IFGEN    $(SPEC_FILE)"
+	@$(IFGEN_CMD) $(FUNCTION) $(SPEC_FILE) $(ACCEL_NAME)
 	mv $(ACCEL_NAME).v $(BUS_IF)
 	mv $(FUNCTION).h $(HEADER)
 
-$(HEADER): $(SPEC_FILE) $(SOURCES)
-	@echo if_gen $(SPEC_FILE) > $@
-	@$(ifgen) $(FUNCTION) $(SPEC_FILE) $(ACCEL_NAME)
+$(HEADER): $(SPEC_FILE) $(SOURCES) $(IFGEN_CMD)
+	@echo "IFGEN    $(SPEC_FILE)"
+	@$(IFGEN_CMD) $(FUNCTION) $(SPEC_FILE) $(ACCEL_NAME)
 	mv $(ACCEL_NAME).v $(BUS_IF)
 	mv $(FUNCTION).h $(HEADER)
+
+$(IFGEN_CMD):
+	@echo "MAKE     $(IFGEN)"
+	make -C $(IFGEN_DIR) $(IFGEN) $(QUIET_FLAG)
 
 clean:
-	rm -rf $(CRUFT) $(ACCELERATOR) $(HOST_EXE) $(BUS_IF) $(HEADER)
+	@echo "Removing created files and cruft"
+	@rm -rf $(CRUFT) $(ACCELERATOR) $(HOST_EXE) $(BUS_IF) $(HEADER)
 
 
