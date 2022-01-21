@@ -1,4 +1,6 @@
 
+#include <string.h>
+
 #include "defines.h"
 #include "cat_access.h"
 #include "mnist_par.hpp"
